@@ -1,0 +1,19 @@
+DEEP SCRAPE RESULTS
+================================================================================
+Root URL: https://example.com
+Total Pages Scraped: 1
+Total Words: 21
+Total Characters: 142
+================================================================================
+
+
+================================================================================
+PAGE 1 (Depth 0)
+================================================================================
+URL: https://example.com
+Word Count: 21
+Character Count: 142
+
+TEXT CONTENT:
+--------------------------------------------------------------------------------
+Example Domain Example Domain This domain is for use in documentation examples without needing permission. Avoid use in operations. Learn more
