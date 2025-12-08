@@ -15,6 +15,44 @@ A Python web scraper that extracts all text information from websites. Supports 
 - Outputs to file or stdout
 - Clean, readable text output
 
+## How to Run
+
+### Quick Start
+
+1. **Clone the repository:**
+   ```bash
+   git clone https://github.com/trenchsheikh/accorn.git
+   cd accorn
+   ```
+
+2. **Install dependencies:**
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+3. **Run the scraper:**
+   ```bash
+   # Scrape a single page
+   python web_scraper.py https://example.com
+   
+   # Deep scrape entire website
+   python web_scraper.py https://example.com --deep -o output.txt
+   ```
+
+### Prerequisites
+
+- Python 3.7 or higher
+- pip (Python package manager)
+
+### Optional: Selenium Setup (for JavaScript-rendered pages)
+
+If you need to scrape JavaScript-heavy websites, install ChromeDriver:
+
+- **macOS:** `brew install chromedriver`
+- **Linux/Windows:** Download from [ChromeDriver downloads](https://chromedriver.chromium.org/)
+
+Then use the `--selenium` flag when running the scraper.
+
 ## Installation
 
 1. Install Python dependencies:
