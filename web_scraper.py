@@ -382,67 +382,199 @@ class RAGKnowledgeExtractor:
         return len(text) // 4
     
     def _extract_business_entities(self, text: str) -> Dict[str, List[str]]:
-        """Extract business-relevant entities from text"""
+        """Extract business-relevant entities from text with improved intelligence"""
         entities = {
             'companies': [],
             'products': [],
             'services': [],
             'technologies': [],
             'locations': [],
-            'contact_info': []
+            'contact_info': [],
+            'prices': [],
+            'dates': []
         }
         
-        # Extract email addresses
+        # Extract email addresses (improved pattern)
         emails = re.findall(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', text)
         entities['contact_info'].extend(emails)
         
-        # Extract phone numbers
-        phones = re.findall(r'[\+]?[(]?[0-9]{1,4}[)]?[-\s\.]?[(]?[0-9]{1,4}[)]?[-\s\.]?[0-9]{1,9}', text)
-        entities['contact_info'].extend(phones)
+        # Extract phone numbers (improved patterns)
+        phone_patterns = [
+            r'\+?\d{1,4}[-.\s]?\(?\d{1,4}\)?[-.\s]?\d{1,4}[-.\s]?\d{1,9}',
+            r'\+?\d{10,15}',
+            r'\(\d{3}\)\s?\d{3}[-.\s]?\d{4}'
+        ]
+        for pattern in phone_patterns:
+            phones = re.findall(pattern, text)
+            entities['contact_info'].extend(phones)
         
         # Extract URLs
-        urls = re.findall(r'https?://[^\s]+', text)
+        urls = re.findall(r'https?://[^\s<>"\'\)]+', text)
         entities['contact_info'].extend(urls)
         
-        # Extract potential company names (capitalized words/phrases)
-        # This is a simple heuristic - could be enhanced with NER
-        company_patterns = re.findall(r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\b', text)
-        entities['companies'] = list(set([c for c in company_patterns if len(c) > 3 and len(c.split()) <= 4]))[:20]
+        # Extract prices/currency amounts
+        prices = re.findall(r'\$[\d,]+\.?\d*|€[\d,]+\.?\d*|£[\d,]+\.?\d*|[\d,]+\.?\d*\s*(USD|EUR|GBP|dollars?|euros?|pounds?)', text, re.IGNORECASE)
+        entities['prices'].extend([p[0] if isinstance(p, tuple) else p for p in prices])
         
-        # Extract technology keywords
-        tech_keywords = ['API', 'SDK', 'JavaScript', 'Python', 'React', 'Node.js', 'AWS', 'Cloud', 
-                        'Database', 'Framework', 'Library', 'Platform', 'Software', 'Application']
-        found_tech = [kw for kw in tech_keywords if kw.lower() in text.lower()]
-        entities['technologies'].extend(found_tech)
+        # Extract dates
+        date_patterns = [
+            r'\d{1,2}[/-]\d{1,2}[/-]\d{2,4}',
+            r'\d{4}[/-]\d{1,2}[/-]\d{1,2}',
+            r'(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2},?\s+\d{4}',
+            r'\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}'
+        ]
+        for pattern in date_patterns:
+            dates = re.findall(pattern, text, re.IGNORECASE)
+            entities['dates'].extend(dates)
         
-        # Remove duplicates
+        # Improved company name extraction
+        # Look for patterns like "Company Name Inc.", "Company Name LLC", etc.
+        company_suffixes = ['Inc', 'LLC', 'Ltd', 'Corp', 'Corporation', 'Company', 'Co', 'LLP', 'LP', 'PC']
+        company_patterns = []
+        
+        # Pattern 1: Capitalized words followed by company suffix
+        for suffix in company_suffixes:
+            pattern = r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3})\s+' + re.escape(suffix) + r'\b'
+            matches = re.findall(pattern, text)
+            company_patterns.extend(matches)
+        
+        # Pattern 2: Standalone capitalized phrases (2-4 words, all caps or title case)
+        standalone = re.findall(r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3})\b', text)
+        # Filter out common words that aren't company names
+        common_words = {'The', 'This', 'That', 'These', 'Those', 'There', 'Here', 'Where', 'When', 'What', 'How', 'Why',
+                       'About', 'Above', 'Below', 'After', 'Before', 'During', 'While', 'Since', 'Until', 'Because',
+                       'However', 'Therefore', 'Moreover', 'Furthermore', 'Additionally', 'Also', 'Other', 'Another',
+                       'First', 'Second', 'Third', 'Last', 'Next', 'Previous', 'Current', 'Recent', 'New', 'Old'}
+        company_patterns.extend([c for c in standalone if c not in common_words and len(c.split()) >= 2])
+        
+        # Pattern 3: Look for "we", "our company", "our product" patterns
+        context_patterns = re.findall(r'\b(?:we|our|us)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})', text, re.IGNORECASE)
+        company_patterns.extend(context_patterns)
+        
+        entities['companies'] = list(set([c.strip() for c in company_patterns if 3 < len(c) < 50]))[:25]
+        
+        # Improved technology extraction
+        tech_keywords = {
+            'languages': ['Python', 'JavaScript', 'Java', 'C++', 'C#', 'Go', 'Rust', 'Swift', 'Kotlin', 'TypeScript',
+                         'Ruby', 'PHP', 'Scala', 'R', 'MATLAB', 'Perl', 'Shell', 'Bash'],
+            'frameworks': ['React', 'Vue', 'Angular', 'Django', 'Flask', 'FastAPI', 'Express', 'Spring', 'Laravel',
+                          'Rails', 'ASP.NET', 'Next.js', 'Nuxt', 'Svelte', 'Ember'],
+            'databases': ['MySQL', 'PostgreSQL', 'MongoDB', 'Redis', 'Elasticsearch', 'Cassandra', 'DynamoDB',
+                         'SQLite', 'Oracle', 'SQL Server', 'MariaDB', 'Neo4j'],
+            'cloud': ['AWS', 'Azure', 'GCP', 'Google Cloud', 'Amazon Web Services', 'Heroku', 'DigitalOcean',
+                     'Cloudflare', 'Vercel', 'Netlify'],
+            'tools': ['Docker', 'Kubernetes', 'Git', 'Jenkins', 'CI/CD', 'GitHub', 'GitLab', 'Jira', 'Confluence'],
+            'concepts': ['API', 'REST', 'GraphQL', 'Microservices', 'DevOps', 'Agile', 'Scrum', 'Machine Learning',
+                        'AI', 'Artificial Intelligence', 'Blockchain', 'Cryptocurrency', 'IoT', 'Big Data']
+        }
+        
+        found_tech = []
+        text_lower = text.lower()
+        for category, keywords in tech_keywords.items():
+            for keyword in keywords:
+                if keyword.lower() in text_lower:
+                    found_tech.append(keyword)
+        
+        entities['technologies'] = list(set(found_tech))[:30]
+        
+        # Extract products/services (look for patterns like "our product", "our service", product names)
+        product_patterns = [
+            r'(?:our|the|a|an)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\s+(?:product|service|solution|platform|tool|software|application)',
+            r'([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\s+(?:v\d+|version\s+\d+|v\.\d+)',  # Version numbers
+            r'([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\s+(?:Pro|Plus|Premium|Enterprise|Standard|Basic)'
+        ]
+        for pattern in product_patterns:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            entities['products'].extend([m.strip() for m in matches if len(m.strip()) > 3])
+        
+        # Extract services (look for service-related keywords)
+        service_keywords = ['service', 'consulting', 'support', 'maintenance', 'training', 'implementation',
+                          'integration', 'development', 'design', 'strategy', 'analytics', 'marketing']
+        service_patterns = re.findall(
+            r'(?:our|we\s+offer|provides?|offers?)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\s+(?:' + '|'.join(service_keywords) + ')',
+            text, re.IGNORECASE
+        )
+        entities['services'].extend([s.strip() for s in service_patterns if len(s.strip()) > 3])
+        
+        # Extract locations (cities, countries, addresses)
+        # Common city/country patterns
+        location_patterns = [
+            r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*),\s*(?:CA|NY|TX|FL|IL|PA|OH|GA|NC|MI|NJ|VA|WA|AZ|MA|TN|IN|MO|MD|WI|CO|MN|SC|AL|LA|KY|OR|OK|CT|IA|AR|UT|NV|MS|KS|NM|NE|WV|ID|HI|NH|ME|MT|RI|DE|SD|ND|AK|DC|VT|WY)\b',  # US states
+            r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*),\s*(?:USA|United States|UK|United Kingdom|Canada|Australia|Germany|France|Italy|Spain|Japan|China|India)\b'
+        ]
+        for pattern in location_patterns:
+            locations = re.findall(pattern, text)
+            entities['locations'].extend([l.strip() for l in locations if len(l.strip()) > 2])
+        
+        # Remove duplicates and filter
         for key in entities:
-            entities[key] = list(set(entities[key]))[:10]  # Limit to top 10
+            entities[key] = list(set([e for e in entities[key] if e and len(str(e).strip()) > 0]))[:20]
         
         return entities
     
-    def _extract_key_topics(self, text: str, max_topics: int = 10) -> List[str]:
-        """Extract key topics from text using frequency analysis"""
-        # Simple keyword extraction based on frequency
+    def _extract_key_topics(self, text: str, max_topics: int = 15) -> List[str]:
+        """Extract key topics from text using improved TF-IDF-like analysis"""
+        # Extended stop words list
+        stop_words = {
+            'that', 'this', 'with', 'from', 'have', 'will', 'your', 'they', 'their', 'there', 'these', 'those',
+            'about', 'which', 'would', 'could', 'should', 'shall', 'must', 'might', 'may', 'can', 'cannot',
+            'what', 'when', 'where', 'why', 'how', 'who', 'whom', 'whose', 'while', 'during', 'after', 'before',
+            'since', 'until', 'because', 'although', 'though', 'however', 'therefore', 'moreover', 'furthermore',
+            'additionally', 'also', 'other', 'another', 'first', 'second', 'third', 'last', 'next', 'previous',
+            'current', 'recent', 'new', 'old', 'many', 'much', 'more', 'most', 'some', 'any', 'all', 'each',
+            'every', 'both', 'either', 'neither', 'such', 'same', 'different', 'same', 'very', 'quite', 'rather',
+            'just', 'only', 'even', 'still', 'yet', 'already', 'again', 'once', 'twice', 'here', 'there', 'where',
+            'when', 'then', 'now', 'today', 'yesterday', 'tomorrow', 'soon', 'later', 'early', 'late', 'always',
+            'never', 'often', 'sometimes', 'usually', 'rarely', 'seldom', 'already', 'just', 'now', 'then'
+        }
+        
+        # Extract words (4+ characters, alphanumeric)
         words = re.findall(r'\b[a-zA-Z]{4,}\b', text.lower())
         
-        # Common stop words to filter
-        stop_words = {'that', 'this', 'with', 'from', 'have', 'will', 'your', 'they', 'their',
-                     'there', 'these', 'those', 'about', 'which', 'would', 'could', 'should'}
-        
-        # Filter and count
+        # Filter stop words
         filtered_words = [w for w in words if w not in stop_words]
+        
+        # Calculate word frequency
         word_freq = {}
+        total_words = len(filtered_words)
         for word in filtered_words:
             word_freq[word] = word_freq.get(word, 0) + 1
         
-        # Get top topics
-        topics = sorted(word_freq.items(), key=lambda x: x[1], reverse=True)[:max_topics]
-        return [topic[0] for topic in topics]
+        # Calculate importance score (TF with length bonus and position bonus)
+        # Longer words and words appearing in first/last sentences are more important
+        sentences = re.split(r'[.!?]+\s+', text)
+        first_sentence_words = set(re.findall(r'\b[a-zA-Z]{4,}\b', sentences[0].lower() if sentences else ''))
+        last_sentence_words = set(re.findall(r'\b[a-zA-Z]{4,}\b', sentences[-1].lower() if sentences else ''))
+        
+        word_scores = {}
+        for word, freq in word_freq.items():
+            # Base TF score
+            tf_score = freq / total_words if total_words > 0 else 0
+            
+            # Length bonus (longer words often more specific/important)
+            length_bonus = len(word) / 10.0
+            
+            # Position bonus (words in first/last sentences are often key topics)
+            position_bonus = 0
+            if word in first_sentence_words:
+                position_bonus += 0.3
+            if word in last_sentence_words:
+                position_bonus += 0.2
+            
+            # Combined score
+            word_scores[word] = tf_score * (1 + length_bonus + position_bonus)
+        
+        # Get top topics by score
+        topics = sorted(word_scores.items(), key=lambda x: x[1], reverse=True)[:max_topics]
+        return [topic[0] for topic in topics if topic[1] > 0.001]  # Filter very low scores
     
     def _chunk_text(self, text: str, metadata: Dict) -> List[Dict]:
-        """Chunk text into optimal sizes for RAG with metadata"""
+        """Chunk text into optimal sizes for RAG with improved semantic awareness"""
         chunks = []
+        
+        # Clean and normalize text
+        text = re.sub(r'\s+', ' ', text)  # Normalize whitespace
+        text = text.strip()
         
         if len(text) <= self.chunk_size:
             # Text fits in one chunk
@@ -451,43 +583,120 @@ class RAGKnowledgeExtractor:
                 'metadata': metadata.copy(),
                 'chunk_index': 0,
                 'total_chunks': 1,
-                'token_count': self._count_tokens(text)
+                'token_count': self._count_tokens(text),
+                'char_count': len(text)
             })
         else:
-            # Split into multiple chunks with overlap
-            start = 0
+            # Try semantic chunking: split by paragraphs first
+            paragraphs = text.split('\n\n')
+            paragraphs = [p.strip() for p in paragraphs if p.strip()]
+            
+            # If paragraphs are too large, split by sentences
+            if not paragraphs or max(len(p) for p in paragraphs) > self.chunk_size * 1.5:
+                # Split by sentences
+                sentences = re.split(r'([.!?]+\s+)', text)
+                # Recombine sentences with their punctuation
+                sentences = [''.join(sentences[i:i+2]) for i in range(0, len(sentences)-1, 2)]
+                if sentences[-1]:
+                    sentences.append(sentences[-1])
+                paragraphs = [s.strip() for s in sentences if s.strip()]
+            
+            # Build chunks from paragraphs
+            current_chunk = []
+            current_length = 0
             chunk_index = 0
             
-            while start < len(text):
-                end = start + self.chunk_size
+            for para in paragraphs:
+                para_length = len(para)
                 
-                # Try to break at sentence boundaries
-                if end < len(text):
-                    # Look for sentence endings near the chunk boundary
-                    sentence_end = max(
-                        text.rfind('.', start, end),
-                        text.rfind('!', start, end),
-                        text.rfind('?', start, end),
-                        text.rfind('\n', start, end)
-                    )
-                    if sentence_end > start + self.chunk_size // 2:
-                        end = sentence_end + 1
+                # If single paragraph is larger than chunk size, split it
+                if para_length > self.chunk_size:
+                    # Save current chunk if exists
+                    if current_chunk:
+                        chunk_text = ' '.join(current_chunk)
+                        chunks.append({
+                            'content': chunk_text,
+                            'metadata': metadata.copy(),
+                            'chunk_index': chunk_index,
+                            'token_count': self._count_tokens(chunk_text),
+                            'char_count': len(chunk_text)
+                        })
+                        chunk_index += 1
+                        current_chunk = []
+                        current_length = 0
+                    
+                    # Split large paragraph by sentences
+                    para_sentences = re.split(r'([.!?]+\s+)', para)
+                    para_sentences = [''.join(para_sentences[i:i+2]) for i in range(0, len(para_sentences)-1, 2)]
+                    if para_sentences[-1]:
+                        para_sentences.append(para_sentences[-1])
+                    
+                    for sent in para_sentences:
+                        sent = sent.strip()
+                        if not sent:
+                            continue
+                        sent_length = len(sent)
+                        
+                        if current_length + sent_length > self.chunk_size and current_chunk:
+                            # Save current chunk
+                            chunk_text = ' '.join(current_chunk)
+                            chunks.append({
+                                'content': chunk_text,
+                                'metadata': metadata.copy(),
+                                'chunk_index': chunk_index,
+                                'token_count': self._count_tokens(chunk_text),
+                                'char_count': len(chunk_text)
+                            })
+                            chunk_index += 1
+                            
+                            # Start new chunk with overlap (last sentence from previous chunk)
+                            if current_chunk:
+                                overlap_text = current_chunk[-1] if len(current_chunk) > 0 else ''
+                                current_chunk = [overlap_text] if overlap_text else []
+                                current_length = len(overlap_text)
+                        
+                        current_chunk.append(sent)
+                        current_length += sent_length + 1  # +1 for space
                 
-                chunk_text = text[start:end].strip()
-                
-                if chunk_text:
+                # If adding this paragraph would exceed chunk size
+                elif current_length + para_length > self.chunk_size and current_chunk:
+                    # Save current chunk
+                    chunk_text = ' '.join(current_chunk)
                     chunks.append({
                         'content': chunk_text,
                         'metadata': metadata.copy(),
                         'chunk_index': chunk_index,
-                        'token_count': self._count_tokens(chunk_text)
+                        'token_count': self._count_tokens(chunk_text),
+                        'char_count': len(chunk_text)
                     })
                     chunk_index += 1
+                    
+                    # Start new chunk with overlap
+                    if self.chunk_overlap > 0 and current_chunk:
+                        # Take last N characters for overlap
+                        overlap_text = ' '.join(current_chunk[-2:]) if len(current_chunk) >= 2 else current_chunk[-1]
+                        if len(overlap_text) > self.chunk_overlap:
+                            overlap_text = overlap_text[-self.chunk_overlap:]
+                        current_chunk = [overlap_text] if overlap_text else []
+                        current_length = len(overlap_text)
+                    else:
+                        current_chunk = []
+                        current_length = 0
                 
-                # Move start with overlap
-                start = end - self.chunk_overlap
-                if start >= len(text):
-                    break
+                # Add paragraph to current chunk
+                current_chunk.append(para)
+                current_length += para_length + 2  # +2 for paragraph spacing
+            
+            # Add final chunk
+            if current_chunk:
+                chunk_text = ' '.join(current_chunk)
+                chunks.append({
+                    'content': chunk_text,
+                    'metadata': metadata.copy(),
+                    'chunk_index': chunk_index,
+                    'token_count': self._count_tokens(chunk_text),
+                    'char_count': len(chunk_text)
+                })
             
             # Update total_chunks for all chunks
             for chunk in chunks:
@@ -513,7 +722,9 @@ class RAGKnowledgeExtractor:
             'services': set(),
             'technologies': set(),
             'locations': set(),
-            'contact_info': set()
+            'contact_info': set(),
+            'prices': set(),
+            'dates': set()
         }
         all_topics = set()
         
@@ -638,15 +849,15 @@ def main():
         help='Delay between requests in seconds (default: 1.0)'
     )
     parser.add_argument(
-        '--rag',
+        '--text-output',
         action='store_true',
-        help='Output in RAG-optimized format (business knowledge extraction)'
+        help='Output in plain text format instead of JSON (default: JSON)'
     )
     parser.add_argument(
         '--rag-format',
         choices=['json', 'jsonl'],
         default='json',
-        help='RAG output format: json (structured) or jsonl (one chunk per line) (default: json)'
+        help='JSON output format: json (structured) or jsonl (one chunk per line) (default: json)'
     )
     parser.add_argument(
         '--chunk-size',
@@ -679,32 +890,16 @@ def main():
                 include_links=args.include_links
             )
             
-            # Process for RAG if requested
-            if args.rag:
-                print("\nProcessing content for RAG optimization...")
-                extractor = RAGKnowledgeExtractor(
-                    chunk_size=args.chunk_size,
-                    chunk_overlap=args.chunk_overlap
-                )
-                rag_data = extractor.process_for_rag(results, args.url)
-                
-                output_path = args.output or 'rag_knowledge_base.json'
-                extractor.save_rag_format(rag_data, output_path, format=args.rag_format)
-                
-                print(f"\n{'='*80}")
-                print("RAG Knowledge Base Generated")
-                print(f"{'='*80}")
-                print(f"Total Pages: {rag_data['knowledge_base']['total_pages']}")
-                print(f"Total Chunks: {rag_data['knowledge_base']['total_chunks']}")
-                print(f"Total Tokens: {rag_data['knowledge_base']['total_tokens']}")
-                print(f"\nAggregated Entities:")
-                for entity_type, entities in rag_data['knowledge_base']['aggregated_entities'].items():
-                    if entities:
-                        print(f"  {entity_type}: {', '.join(entities[:5])}{'...' if len(entities) > 5 else ''}")
-                print(f"\nTop Topics: {', '.join(rag_data['knowledge_base']['aggregated_topics'][:10])}")
-                print(f"\nSaved to: {output_path}")
-            else:
-                # Generate standard output
+            # Always process for RAG (JSON output by default)
+            print("\nProcessing content for RAG optimization...")
+            extractor = RAGKnowledgeExtractor(
+                chunk_size=args.chunk_size,
+                chunk_overlap=args.chunk_overlap
+            )
+            rag_data = extractor.process_for_rag(results, args.url)
+            
+            if args.text_output:
+                # Generate standard text output if requested
                 output_text = f"DEEP SCRAPE RESULTS\n"
                 output_text += f"{'='*80}\n"
                 output_text += f"Root URL: {args.url}\n"
@@ -732,26 +927,13 @@ def main():
                         for link in result['links']:
                             output_text += f"Text: {link['text']}\nURL: {link['url']}\n\n"
                 
-                if args.output:
-                    with open(args.output, 'w', encoding='utf-8') as f:
-                        f.write(output_text)
-                    print(f"\nContent saved to: {args.output}")
-                else:
-                    print(output_text)
-        else:
-            # Single page scrape mode
-            result = scraper.scrape(args.url, include_links=args.include_links)
-            
-            # Process for RAG if requested (convert single result to list)
-            if args.rag:
-                print("\nProcessing content for RAG optimization...")
-                extractor = RAGKnowledgeExtractor(
-                    chunk_size=args.chunk_size,
-                    chunk_overlap=args.chunk_overlap
-                )
-                rag_data = extractor.process_for_rag([result], args.url)
-                
-                output_path = args.output or 'rag_knowledge_base.json'
+                output_path = args.output or 'scrape_output.txt'
+                with open(output_path, 'w', encoding='utf-8') as f:
+                    f.write(output_text)
+                print(f"\nText content saved to: {output_path}")
+            else:
+                # Default: JSON output
+                output_path = args.output or 'knowledge_base.json'
                 extractor.save_rag_format(rag_data, output_path, format=args.rag_format)
                 
                 print(f"\n{'='*80}")
@@ -760,8 +942,26 @@ def main():
                 print(f"Total Pages: {rag_data['knowledge_base']['total_pages']}")
                 print(f"Total Chunks: {rag_data['knowledge_base']['total_chunks']}")
                 print(f"Total Tokens: {rag_data['knowledge_base']['total_tokens']}")
+                print(f"\nAggregated Entities:")
+                for entity_type, entities in rag_data['knowledge_base']['aggregated_entities'].items():
+                    if entities:
+                        print(f"  {entity_type}: {', '.join(str(e) for e in entities[:5])}{'...' if len(entities) > 5 else ''}")
+                print(f"\nTop Topics: {', '.join(rag_data['knowledge_base']['aggregated_topics'][:10])}")
                 print(f"\nSaved to: {output_path}")
-            else:
+        else:
+            # Single page scrape mode
+            result = scraper.scrape(args.url, include_links=args.include_links)
+            
+            # Always process for RAG (JSON output by default)
+            print("\nProcessing content for RAG optimization...")
+            extractor = RAGKnowledgeExtractor(
+                chunk_size=args.chunk_size,
+                chunk_overlap=args.chunk_overlap
+            )
+            rag_data = extractor.process_for_rag([result], args.url)
+            
+            if args.text_output:
+                # Generate standard text output if requested
                 output_text = f"URL: {result['url']}\n"
                 output_text += f"Word Count: {result['word_count']}\n"
                 output_text += f"Character Count: {result['character_count']}\n"
@@ -777,12 +977,27 @@ def main():
                     for link in result['links']:
                         output_text += f"Text: {link['text']}\nURL: {link['url']}\n\n"
                 
-                if args.output:
-                    with open(args.output, 'w', encoding='utf-8') as f:
-                        f.write(output_text)
-                    print(f"\nContent saved to: {args.output}")
-                else:
-                    print(output_text)
+                output_path = args.output or 'scrape_output.txt'
+                with open(output_path, 'w', encoding='utf-8') as f:
+                    f.write(output_text)
+                print(f"\nText content saved to: {output_path}")
+            else:
+                # Default: JSON output
+                output_path = args.output or 'knowledge_base.json'
+                extractor.save_rag_format(rag_data, output_path, format=args.rag_format)
+                
+                print(f"\n{'='*80}")
+                print("RAG Knowledge Base Generated")
+                print(f"{'='*80}")
+                print(f"Total Pages: {rag_data['knowledge_base']['total_pages']}")
+                print(f"Total Chunks: {rag_data['knowledge_base']['total_chunks']}")
+                print(f"Total Tokens: {rag_data['knowledge_base']['total_tokens']}")
+                print(f"\nAggregated Entities:")
+                for entity_type, entities in rag_data['knowledge_base']['aggregated_entities'].items():
+                    if entities:
+                        print(f"  {entity_type}: {', '.join(str(e) for e in entities[:5])}{'...' if len(entities) > 5 else ''}")
+                print(f"\nTop Topics: {', '.join(rag_data['knowledge_base']['aggregated_topics'][:10])}")
+                print(f"\nSaved to: {output_path}")
             
     except KeyboardInterrupt:
         print("\n\nScraping interrupted by user")

@@ -1,22 +1,23 @@
 # Web Scraper
 
-A Python web scraper that extracts all text information from websites. Supports both static HTML pages and JavaScript-rendered content. **Now with RAG-optimized business knowledge extraction!**
+A Python web scraper that extracts all text information from websites. Supports both static HTML pages and JavaScript-rendered content. **Always produces RAG-optimized JSON output with intelligent business knowledge extraction!**
 
 ## Features
 
+- **Always outputs JSON**: Default output is structured JSON optimized for RAG systems
 - Extracts all text content from web pages
 - **Deep scraping**: Follows all links from root page to scrape entire websites
-- **RAG-optimized output**: Extracts business knowledge and structures it for Retrieval-Augmented Generation systems
+- **Intelligent RAG processing**: Advanced business knowledge extraction and semantic chunking
 - Removes scripts, styles, and other non-text elements
 - Supports static HTML pages (using requests + BeautifulSoup)
 - Optional support for JavaScript-rendered pages (using Selenium)
 - Can include link information
 - Configurable depth and page limits
 - Rate limiting to be respectful to servers
-- Outputs to file or stdout
-- Clean, readable text output
-- **Business entity extraction**: Companies, products, services, technologies, contact info
-- **Intelligent chunking**: Optimal text chunking for RAG systems with metadata
+- **Advanced entity extraction**: Companies, products, services, technologies, locations, contact info, prices, dates
+- **Smart topic extraction**: TF-IDF-like scoring with position and length weighting
+- **Semantic chunking**: Paragraph and sentence-aware chunking for better context preservation
+- **Rich metadata**: Each chunk includes URL, depth, entities, topics, timestamps, and token counts
 
 ## How to Run
 
@@ -35,14 +36,17 @@ A Python web scraper that extracts all text information from websites. Supports 
 
 3. **Run the scraper:**
    ```bash
-   # Scrape a single page
+   # Scrape a single page (outputs JSON by default)
    python web_scraper.py https://example.com
    
-   # Deep scrape entire website
-   python web_scraper.py https://example.com --deep -o output.txt
+   # Deep scrape entire website (outputs JSON by default)
+   python web_scraper.py https://example.com --deep -o knowledge_base.json
    
-   # Generate RAG-optimized business knowledge
-   python web_scraper.py https://example.com --deep --rag -o rag_knowledge.json
+   # Output in JSONL format (one chunk per line)
+   python web_scraper.py https://example.com --deep --rag-format jsonl
+   
+   # Get plain text output instead of JSON
+   python web_scraper.py https://example.com --deep --text-output
    ```
 
 ### Prerequisites
@@ -120,20 +124,23 @@ python web_scraper.py https://example.com --deep --delay 0.5
 python web_scraper.py https://example.com --deep -o full_site_content.txt
 ```
 
-### RAG-Optimized Business Knowledge Extraction
+### JSON Output (Default)
 
 ```bash
-# Generate RAG-optimized knowledge base (JSON format)
-python web_scraper.py https://example.com --deep --rag -o rag_knowledge.json
+# JSON output is the default - no flags needed!
+python web_scraper.py https://example.com --deep -o knowledge_base.json
 
-# Generate RAG knowledge in JSONL format (one chunk per line)
-python web_scraper.py https://example.com --deep --rag --rag-format jsonl -o rag_knowledge.jsonl
+# JSONL format (one chunk per line) for streaming processing
+python web_scraper.py https://example.com --deep --rag-format jsonl -o knowledge_base.jsonl
 
-# Custom chunk size and overlap for RAG
-python web_scraper.py https://example.com --deep --rag --chunk-size 2000 --chunk-overlap 400
+# Custom chunk size and overlap
+python web_scraper.py https://example.com --deep --chunk-size 2000 --chunk-overlap 400
 
-# RAG with Selenium for JavaScript sites
-python web_scraper.py https://example.com --deep --rag --selenium -o rag_knowledge.json
+# With Selenium for JavaScript sites
+python web_scraper.py https://example.com --deep --selenium -o knowledge_base.json
+
+# Plain text output (if you prefer text over JSON)
+python web_scraper.py https://example.com --deep --text-output -o output.txt
 ```
 
 ## Command Line Options
@@ -147,8 +154,8 @@ python web_scraper.py https://example.com --deep --rag --selenium -o rag_knowled
 - `--max-depth`: Maximum crawl depth for deep scrape (default: 5)
 - `--max-pages`: Maximum number of pages to scrape (default: 100)
 - `--delay`: Delay between requests in seconds (default: 1.0)
-- `--rag`: Output in RAG-optimized format (business knowledge extraction)
-- `--rag-format`: RAG output format: `json` (structured) or `jsonl` (one chunk per line) (default: json)
+- `--text-output`: Output in plain text format instead of JSON (default: JSON)
+- `--rag-format`: JSON output format: `json` (structured) or `jsonl` (one chunk per line) (default: json)
 - `--chunk-size`: Chunk size in characters for RAG output (default: 1000)
 - `--chunk-overlap`: Overlap between chunks in characters for RAG output (default: 200)
 
@@ -198,8 +205,8 @@ The scraper outputs:
   - Full text content
   - Links (if `--include-links` is used)
 
-### RAG-Optimized Format
-When using `--rag`, the output is structured JSON/JSONL optimized for RAG systems:
+### JSON Output Format (Default)
+The scraper always outputs structured JSON/JSONL optimized for RAG systems:
 
 **JSON Structure:**
 ```json
@@ -241,12 +248,19 @@ When using `--rag`, the output is structured JSON/JSONL optimized for RAG system
 ```
 
 **Features:**
-- **Intelligent chunking**: Text split into optimal sizes with sentence boundary awareness
-- **Metadata-rich**: Each chunk includes URL, depth, entities, topics, and timestamps
-- **Entity extraction**: Automatically extracts companies, products, services, technologies, and contact info
-- **Topic extraction**: Identifies key topics from content
-- **Token counting**: Accurate token counts for embedding models
+- **Semantic chunking**: Intelligent paragraph and sentence-aware chunking for better context preservation
+- **Metadata-rich**: Each chunk includes URL, depth, entities, topics, timestamps, and token/character counts
+- **Advanced entity extraction**: Automatically extracts:
+  - Companies (with pattern matching for Inc, LLC, Corp, etc.)
+  - Products and services (with version numbers and tiers)
+  - Technologies (languages, frameworks, databases, cloud platforms, tools)
+  - Locations (cities, states, countries)
+  - Contact info (emails, phones, URLs)
+  - Prices and dates
+- **Smart topic extraction**: TF-IDF-like scoring with position weighting (first/last sentences) and length bonuses
+- **Token counting**: Accurate token counts using tiktoken for embedding models
 - **JSONL support**: One chunk per line format for streaming processing
+- **Improved intelligence**: Better pattern recognition, context awareness, and entity disambiguation
 
 ## Notes
 
@@ -258,7 +272,10 @@ When using `--rag`, the output is structured JSON/JSONL optimized for RAG system
 - For JavaScript-heavy sites, use the `--selenium` flag
 - The scraper automatically removes scripts, styles, and metadata
 - Deep scraping can take a long time for large websites - use `--max-pages` to limit scope
-- **RAG output**: Optimized for use with vector databases (Pinecone, Weaviate, Chroma, etc.) and LLM applications
+- **JSON is default**: The scraper always produces JSON output optimized for RAG systems
+- **Use `--text-output`**: If you prefer plain text output instead of JSON
+- **RAG optimization**: Output is optimized for vector databases (Pinecone, Weaviate, Chroma, etc.) and LLM applications
 - **Chunk sizing**: Default 1000 characters works well for most RAG systems, adjust based on your embedding model's context window
-- **Entity extraction**: Uses pattern matching and heuristics - for production use, consider integrating with NER models (spaCy, NLTK)
+- **Entity extraction**: Uses advanced pattern matching, heuristics, and context analysis - for production use, consider integrating with NER models (spaCy, NLTK) for even better results
+- **Quality improvements**: Enhanced entity extraction, smarter topic identification, and semantic chunking for better RAG performance
 
