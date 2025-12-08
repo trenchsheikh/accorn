@@ -7,10 +7,18 @@ Supports both static HTML pages and JavaScript-rendered content
 import argparse
 import sys
 import time
+import json
+from datetime import datetime
 from urllib.parse import urljoin, urlparse
-from typing import Set, Optional, List, Dict
+from typing import Set, Optional, List, Dict, Tuple
 from collections import deque
 import re
+
+try:
+    import tiktoken
+    TIKTOKEN_AVAILABLE = True
+except ImportError:
+    TIKTOKEN_AVAILABLE = False
 
 try:
     import requests
@@ -346,6 +354,241 @@ class WebScraper:
             self.driver.quit()
 
 
+class RAGKnowledgeExtractor:
+    """Extracts and structures business knowledge optimized for RAG systems"""
+    
+    def __init__(self, chunk_size: int = 1000, chunk_overlap: int = 200):
+        """
+        Initialize the RAG knowledge extractor
+        
+        Args:
+            chunk_size: Target chunk size in characters (default: 1000)
+            chunk_overlap: Overlap between chunks in characters (default: 200)
+        """
+        self.chunk_size = chunk_size
+        self.chunk_overlap = chunk_overlap
+        self.encoding = None
+        if TIKTOKEN_AVAILABLE:
+            try:
+                self.encoding = tiktoken.get_encoding("cl100k_base")
+            except:
+                pass
+    
+    def _count_tokens(self, text: str) -> int:
+        """Count tokens in text using tiktoken if available"""
+        if self.encoding:
+            return len(self.encoding.encode(text))
+        # Fallback: approximate 1 token = 4 characters
+        return len(text) // 4
+    
+    def _extract_business_entities(self, text: str) -> Dict[str, List[str]]:
+        """Extract business-relevant entities from text"""
+        entities = {
+            'companies': [],
+            'products': [],
+            'services': [],
+            'technologies': [],
+            'locations': [],
+            'contact_info': []
+        }
+        
+        # Extract email addresses
+        emails = re.findall(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', text)
+        entities['contact_info'].extend(emails)
+        
+        # Extract phone numbers
+        phones = re.findall(r'[\+]?[(]?[0-9]{1,4}[)]?[-\s\.]?[(]?[0-9]{1,4}[)]?[-\s\.]?[0-9]{1,9}', text)
+        entities['contact_info'].extend(phones)
+        
+        # Extract URLs
+        urls = re.findall(r'https?://[^\s]+', text)
+        entities['contact_info'].extend(urls)
+        
+        # Extract potential company names (capitalized words/phrases)
+        # This is a simple heuristic - could be enhanced with NER
+        company_patterns = re.findall(r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\b', text)
+        entities['companies'] = list(set([c for c in company_patterns if len(c) > 3 and len(c.split()) <= 4]))[:20]
+        
+        # Extract technology keywords
+        tech_keywords = ['API', 'SDK', 'JavaScript', 'Python', 'React', 'Node.js', 'AWS', 'Cloud', 
+                        'Database', 'Framework', 'Library', 'Platform', 'Software', 'Application']
+        found_tech = [kw for kw in tech_keywords if kw.lower() in text.lower()]
+        entities['technologies'].extend(found_tech)
+        
+        # Remove duplicates
+        for key in entities:
+            entities[key] = list(set(entities[key]))[:10]  # Limit to top 10
+        
+        return entities
+    
+    def _extract_key_topics(self, text: str, max_topics: int = 10) -> List[str]:
+        """Extract key topics from text using frequency analysis"""
+        # Simple keyword extraction based on frequency
+        words = re.findall(r'\b[a-zA-Z]{4,}\b', text.lower())
+        
+        # Common stop words to filter
+        stop_words = {'that', 'this', 'with', 'from', 'have', 'will', 'your', 'they', 'their',
+                     'there', 'these', 'those', 'about', 'which', 'would', 'could', 'should'}
+        
+        # Filter and count
+        filtered_words = [w for w in words if w not in stop_words]
+        word_freq = {}
+        for word in filtered_words:
+            word_freq[word] = word_freq.get(word, 0) + 1
+        
+        # Get top topics
+        topics = sorted(word_freq.items(), key=lambda x: x[1], reverse=True)[:max_topics]
+        return [topic[0] for topic in topics]
+    
+    def _chunk_text(self, text: str, metadata: Dict) -> List[Dict]:
+        """Chunk text into optimal sizes for RAG with metadata"""
+        chunks = []
+        
+        if len(text) <= self.chunk_size:
+            # Text fits in one chunk
+            chunks.append({
+                'content': text,
+                'metadata': metadata.copy(),
+                'chunk_index': 0,
+                'total_chunks': 1,
+                'token_count': self._count_tokens(text)
+            })
+        else:
+            # Split into multiple chunks with overlap
+            start = 0
+            chunk_index = 0
+            
+            while start < len(text):
+                end = start + self.chunk_size
+                
+                # Try to break at sentence boundaries
+                if end < len(text):
+                    # Look for sentence endings near the chunk boundary
+                    sentence_end = max(
+                        text.rfind('.', start, end),
+                        text.rfind('!', start, end),
+                        text.rfind('?', start, end),
+                        text.rfind('\n', start, end)
+                    )
+                    if sentence_end > start + self.chunk_size // 2:
+                        end = sentence_end + 1
+                
+                chunk_text = text[start:end].strip()
+                
+                if chunk_text:
+                    chunks.append({
+                        'content': chunk_text,
+                        'metadata': metadata.copy(),
+                        'chunk_index': chunk_index,
+                        'token_count': self._count_tokens(chunk_text)
+                    })
+                    chunk_index += 1
+                
+                # Move start with overlap
+                start = end - self.chunk_overlap
+                if start >= len(text):
+                    break
+            
+            # Update total_chunks for all chunks
+            for chunk in chunks:
+                chunk['total_chunks'] = len(chunks)
+        
+        return chunks
+    
+    def process_for_rag(self, scrape_results: List[Dict], root_url: str) -> Dict:
+        """
+        Process scraped results into RAG-optimized format
+        
+        Args:
+            scrape_results: List of scraped page results
+            root_url: Root URL of the website
+        
+        Returns:
+            Dictionary with RAG-optimized knowledge base
+        """
+        all_chunks = []
+        all_entities = {
+            'companies': set(),
+            'products': set(),
+            'services': set(),
+            'technologies': set(),
+            'locations': set(),
+            'contact_info': set()
+        }
+        all_topics = set()
+        
+        for result in scrape_results:
+            if result.get('error') or not result.get('text'):
+                continue
+            
+            url = result['url']
+            text = result['text']
+            depth = result.get('depth', 0)
+            
+            # Extract entities and topics
+            entities = self._extract_business_entities(text)
+            topics = self._extract_key_topics(text)
+            
+            # Aggregate entities
+            for key in all_entities:
+                all_entities[key].update(entities.get(key, []))
+            all_topics.update(topics)
+            
+            # Create metadata for this page
+            metadata = {
+                'url': url,
+                'source': root_url,
+                'depth': depth,
+                'word_count': result.get('word_count', 0),
+                'character_count': result.get('character_count', 0),
+                'scraped_at': datetime.now().isoformat(),
+                'entities': entities,
+                'topics': topics
+            }
+            
+            # Chunk the text
+            chunks = self._chunk_text(text, metadata)
+            all_chunks.extend(chunks)
+        
+        # Convert sets to lists for JSON serialization
+        aggregated_entities = {k: list(v)[:20] for k, v in all_entities.items()}
+        
+        return {
+            'knowledge_base': {
+                'root_url': root_url,
+                'total_pages': len(scrape_results),
+                'total_chunks': len(all_chunks),
+                'total_tokens': sum(c['token_count'] for c in all_chunks),
+                'scraped_at': datetime.now().isoformat(),
+                'aggregated_entities': aggregated_entities,
+                'aggregated_topics': list(all_topics)[:30]
+            },
+            'chunks': all_chunks
+        }
+    
+    def save_rag_format(self, rag_data: Dict, output_path: str, format: str = 'json'):
+        """
+        Save RAG-optimized data to file
+        
+        Args:
+            rag_data: RAG-optimized data dictionary
+            output_path: Output file path
+            format: Output format ('json' or 'jsonl')
+        """
+        if format == 'jsonl':
+            # JSONL format: one JSON object per line (each chunk)
+            with open(output_path, 'w', encoding='utf-8') as f:
+                # Write knowledge base summary first
+                f.write(json.dumps({'type': 'knowledge_base', 'data': rag_data['knowledge_base']}, ensure_ascii=False) + '\n')
+                # Write each chunk
+                for chunk in rag_data['chunks']:
+                    f.write(json.dumps({'type': 'chunk', 'data': chunk}, ensure_ascii=False) + '\n')
+        else:
+            # Standard JSON format
+            with open(output_path, 'w', encoding='utf-8') as f:
+                json.dump(rag_data, f, indent=2, ensure_ascii=False)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='Web scraper that extracts all text information from a website'
@@ -394,6 +637,29 @@ def main():
         default=1.0,
         help='Delay between requests in seconds (default: 1.0)'
     )
+    parser.add_argument(
+        '--rag',
+        action='store_true',
+        help='Output in RAG-optimized format (business knowledge extraction)'
+    )
+    parser.add_argument(
+        '--rag-format',
+        choices=['json', 'jsonl'],
+        default='json',
+        help='RAG output format: json (structured) or jsonl (one chunk per line) (default: json)'
+    )
+    parser.add_argument(
+        '--chunk-size',
+        type=int,
+        default=1000,
+        help='Chunk size in characters for RAG output (default: 1000)'
+    )
+    parser.add_argument(
+        '--chunk-overlap',
+        type=int,
+        default=200,
+        help='Overlap between chunks in characters for RAG output (default: 200)'
+    )
     
     args = parser.parse_args()
     
@@ -413,58 +679,110 @@ def main():
                 include_links=args.include_links
             )
             
-            # Generate output
-            output_text = f"DEEP SCRAPE RESULTS\n"
-            output_text += f"{'='*80}\n"
-            output_text += f"Root URL: {args.url}\n"
-            output_text += f"Total Pages Scraped: {len(results)}\n"
-            output_text += f"Total Words: {sum(r['word_count'] for r in results)}\n"
-            output_text += f"Total Characters: {sum(r['character_count'] for r in results)}\n"
-            output_text += f"{'='*80}\n\n"
-            
-            # Add content from each page
-            for i, result in enumerate(results, 1):
-                output_text += f"\n{'='*80}\n"
-                output_text += f"PAGE {i} (Depth {result['depth']})\n"
-                output_text += f"{'='*80}\n"
-                output_text += f"URL: {result['url']}\n"
-                output_text += f"Word Count: {result['word_count']}\n"
-                output_text += f"Character Count: {result['character_count']}\n"
-                output_text += f"\nTEXT CONTENT:\n"
-                output_text += f"{'-'*80}\n"
-                output_text += result['text']
-                output_text += "\n"
+            # Process for RAG if requested
+            if args.rag:
+                print("\nProcessing content for RAG optimization...")
+                extractor = RAGKnowledgeExtractor(
+                    chunk_size=args.chunk_size,
+                    chunk_overlap=args.chunk_overlap
+                )
+                rag_data = extractor.process_for_rag(results, args.url)
                 
-                if args.include_links and 'links' in result:
-                    output_text += f"\nLINKS:\n"
+                output_path = args.output or 'rag_knowledge_base.json'
+                extractor.save_rag_format(rag_data, output_path, format=args.rag_format)
+                
+                print(f"\n{'='*80}")
+                print("RAG Knowledge Base Generated")
+                print(f"{'='*80}")
+                print(f"Total Pages: {rag_data['knowledge_base']['total_pages']}")
+                print(f"Total Chunks: {rag_data['knowledge_base']['total_chunks']}")
+                print(f"Total Tokens: {rag_data['knowledge_base']['total_tokens']}")
+                print(f"\nAggregated Entities:")
+                for entity_type, entities in rag_data['knowledge_base']['aggregated_entities'].items():
+                    if entities:
+                        print(f"  {entity_type}: {', '.join(entities[:5])}{'...' if len(entities) > 5 else ''}")
+                print(f"\nTop Topics: {', '.join(rag_data['knowledge_base']['aggregated_topics'][:10])}")
+                print(f"\nSaved to: {output_path}")
+            else:
+                # Generate standard output
+                output_text = f"DEEP SCRAPE RESULTS\n"
+                output_text += f"{'='*80}\n"
+                output_text += f"Root URL: {args.url}\n"
+                output_text += f"Total Pages Scraped: {len(results)}\n"
+                output_text += f"Total Words: {sum(r['word_count'] for r in results)}\n"
+                output_text += f"Total Characters: {sum(r['character_count'] for r in results)}\n"
+                output_text += f"{'='*80}\n\n"
+                
+                # Add content from each page
+                for i, result in enumerate(results, 1):
+                    output_text += f"\n{'='*80}\n"
+                    output_text += f"PAGE {i} (Depth {result['depth']})\n"
+                    output_text += f"{'='*80}\n"
+                    output_text += f"URL: {result['url']}\n"
+                    output_text += f"Word Count: {result['word_count']}\n"
+                    output_text += f"Character Count: {result['character_count']}\n"
+                    output_text += f"\nTEXT CONTENT:\n"
                     output_text += f"{'-'*80}\n"
-                    for link in result['links']:
-                        output_text += f"Text: {link['text']}\nURL: {link['url']}\n\n"
+                    output_text += result['text']
+                    output_text += "\n"
+                    
+                    if args.include_links and 'links' in result:
+                        output_text += f"\nLINKS:\n"
+                        output_text += f"{'-'*80}\n"
+                        for link in result['links']:
+                            output_text += f"Text: {link['text']}\nURL: {link['url']}\n\n"
+                
+                if args.output:
+                    with open(args.output, 'w', encoding='utf-8') as f:
+                        f.write(output_text)
+                    print(f"\nContent saved to: {args.output}")
+                else:
+                    print(output_text)
         else:
             # Single page scrape mode
             result = scraper.scrape(args.url, include_links=args.include_links)
             
-            output_text = f"URL: {result['url']}\n"
-            output_text += f"Word Count: {result['word_count']}\n"
-            output_text += f"Character Count: {result['character_count']}\n"
-            output_text += "\n" + "="*80 + "\n"
-            output_text += "TEXT CONTENT:\n"
-            output_text += "="*80 + "\n\n"
-            output_text += result['text']
-            
-            if args.include_links and 'links' in result:
-                output_text += "\n\n" + "="*80 + "\n"
-                output_text += "LINKS:\n"
+            # Process for RAG if requested (convert single result to list)
+            if args.rag:
+                print("\nProcessing content for RAG optimization...")
+                extractor = RAGKnowledgeExtractor(
+                    chunk_size=args.chunk_size,
+                    chunk_overlap=args.chunk_overlap
+                )
+                rag_data = extractor.process_for_rag([result], args.url)
+                
+                output_path = args.output or 'rag_knowledge_base.json'
+                extractor.save_rag_format(rag_data, output_path, format=args.rag_format)
+                
+                print(f"\n{'='*80}")
+                print("RAG Knowledge Base Generated")
+                print(f"{'='*80}")
+                print(f"Total Pages: {rag_data['knowledge_base']['total_pages']}")
+                print(f"Total Chunks: {rag_data['knowledge_base']['total_chunks']}")
+                print(f"Total Tokens: {rag_data['knowledge_base']['total_tokens']}")
+                print(f"\nSaved to: {output_path}")
+            else:
+                output_text = f"URL: {result['url']}\n"
+                output_text += f"Word Count: {result['word_count']}\n"
+                output_text += f"Character Count: {result['character_count']}\n"
+                output_text += "\n" + "="*80 + "\n"
+                output_text += "TEXT CONTENT:\n"
                 output_text += "="*80 + "\n\n"
-                for link in result['links']:
-                    output_text += f"Text: {link['text']}\nURL: {link['url']}\n\n"
-        
-        if args.output:
-            with open(args.output, 'w', encoding='utf-8') as f:
-                f.write(output_text)
-            print(f"\nContent saved to: {args.output}")
-        else:
-            print(output_text)
+                output_text += result['text']
+                
+                if args.include_links and 'links' in result:
+                    output_text += "\n\n" + "="*80 + "\n"
+                    output_text += "LINKS:\n"
+                    output_text += "="*80 + "\n\n"
+                    for link in result['links']:
+                        output_text += f"Text: {link['text']}\nURL: {link['url']}\n\n"
+                
+                if args.output:
+                    with open(args.output, 'w', encoding='utf-8') as f:
+                        f.write(output_text)
+                    print(f"\nContent saved to: {args.output}")
+                else:
+                    print(output_text)
             
     except KeyboardInterrupt:
         print("\n\nScraping interrupted by user")
