@@ -8,11 +8,16 @@ class AgentCreate(BaseModel):
     email: str
     name: Optional[str] = None
 
+class AgentUpdate(BaseModel):
+    voice_id: Optional[str] = None
+    personality: Optional[str] = None
+
 class AgentResponse(BaseModel):
     id: UUID
     root_url: str
     status: str
     public_key: Optional[str] = None
+    config: Optional[Dict[str, Any]] = {}
     
     class Config:
         from_attributes = True

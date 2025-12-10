@@ -11,7 +11,7 @@ class VoiceService:
             self.client = None
             self.enabled = False
 
-    def generate_audio(self, text: str) -> str:
+    def generate_audio(self, text: str, voice_id: str = None) -> str:
         """
         Generate audio from text using ElevenLabs.
         Returns base64 encoded audio.
@@ -23,7 +23,7 @@ class VoiceService:
             # The generate method returns a generator in v1+, we need to consume it
             audio_generator = self.client.text_to_speech.convert(
                 text=text,
-                voice_id="21m00Tcm4TlvDq8ikWAM", # Bella
+                voice_id=voice_id or "21m00Tcm4TlvDq8ikWAM", # Default to Bella
                 model_id="eleven_multilingual_v2"
             )
             

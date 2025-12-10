@@ -79,7 +79,7 @@ User Question: {query}
         else:
             return f"[MOCK GEMINI] Based on context: {context_str[:100]}..."
 
-    async def generate_answer_stream(self, query: str, context: List[Chunk]):
+    async def generate_answer_stream(self, query: str, context: List[Chunk], system_instruction: str = None):
         """Generate answer using Gemini with streaming"""
         if not context:
             yield "I don't have enough information to answer that."
@@ -87,12 +87,20 @@ User Question: {query}
 
         context_str = "\n\n".join([f"Source ({c.page_url}): {c.content}" for c in context])
         
-        prompt = f"""You are a knowledgeable and helpful employee of the company. 
+        base_instruction = """You are a knowledgeable and helpful employee of the company. 
 Answer the user's question naturally and professionally, as if you are speaking directly to a customer.
 Do NOT mention "context", "provided text", or "documents". Use the information provided below as if it is your own knowledge.
 
 If the user greets you (e.g., 'hi', 'hello'), respond politely and professionally.
-If the answer is not in the information below, politely say you don't have that information right now.
+If the answer is not in the information below, politely say you don't have that information right now."""
+
+        if system_instruction:
+            base_instruction = f"""{system_instruction}
+            
+Do NOT mention "context", "provided text", or "documents". Use the information provided below as if it is your own knowledge.
+If the answer is not in the information below, politely say you don't have that information right now."""
+        
+        prompt = f"""{base_instruction}
 
 Information:
 {context_str}

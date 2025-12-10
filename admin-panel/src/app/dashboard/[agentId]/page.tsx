@@ -6,14 +6,10 @@ import axios from "axios";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
-import { Progress } from "@/components/ui/progress";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Separator } from "@/components/ui/separator";
-import { Loader2, Send, Copy, Check, Bot, User, Globe, Code } from "lucide-react";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Loader2, Mic, Send, Sparkles, Check, X, ArrowRight, Bot, User, MicOff, Code, Copy } from "lucide-react";
 
 interface ScrapeStatus {
     status: "pending" | "scraping" | "ready" | "failed";
@@ -22,22 +18,54 @@ interface ScrapeStatus {
     logs?: any[];
 }
 
-interface Message {
-    role: "user" | "agent";
-    content: string;
+interface Voice {
+    id: string;
+    name: string;
 }
+
+interface ProposedChanges {
+    voice_id?: string;
+    personality?: string;
+}
+
+interface AdminResponse {
+    reply: string;
+    audio_base64?: string;
+    proposed_changes?: ProposedChanges;
+    voice_options?: Voice[];
+}
+
+const VOICES = [
+    { id: "21m00Tcm4TlvDq8ikWAM", name: "Bella (American, Soft)" },
+    { id: "AZnzlk1XvdvUeBnXmlld", name: "Domi (American, Strong)" },
+    { id: "EXAVITQu4vr4xnSDxMaL", name: "Bella (British, Professional)" },
+    { id: "ErXwobaYiN019PkySvjV", "name": "Antoni (American, Deep)" },
+    { id: "MF3mGyEYCl7XYWbV9V6O", "name": "Elli (American, Young)" },
+    { id: "TxGEqnHWrfWFTfGW9XjX", "name": "Josh (American, Deep)" },
+    { id: "VR6AewLTigWg4xSOukaG", "name": "Arnold (American, Crisp)" },
+    { id: "pNInz6obpgDQGcFmaJgB", "name": "Adam (American, Deep)" },
+    { id: "yoZ06aMxZJJ28mfd3POQ", "name": "Sam (American, Raspy)" },
+];
 
 export default function Dashboard() {
     const params = useParams();
     const agentId = params.agentId as string;
 
     const [status, setStatus] = useState<ScrapeStatus | null>(null);
-    const [messages, setMessages] = useState<Message[]>([]);
     const [input, setInput] = useState("");
-    const [chatLoading, setChatLoading] = useState(false);
-    const [copied, setCopied] = useState(false);
+    const [isListening, setIsListening] = useState(false);
+    const [isProcessing, setIsProcessing] = useState(false);
 
-    const scrollAreaRef = useRef<HTMLDivElement>(null);
+    // Admin Agent State
+    const [adminReply, setAdminReply] = useState<string>("Hi! I'm your Agent Configurator. How can I help you today?");
+    const [proposedChanges, setProposedChanges] = useState<ProposedChanges | null>(null);
+    const [voiceOptions, setVoiceOptions] = useState<Voice[] | null>(null);
+    const [isPlayingAudio, setIsPlayingAudio] = useState(false);
+    const [playingPreviewId, setPlayingPreviewId] = useState<string | null>(null);
+
+    // Audio Context
+    const audioContextRef = useRef<AudioContext | null>(null);
+    const recognitionRef = useRef<any>(null);
 
     // Poll status
     useEffect(() => {
@@ -49,297 +77,258 @@ export default function Dashboard() {
                 console.error("Error fetching status:", error);
             }
         };
-
         fetchStatus();
         const interval = setInterval(fetchStatus, 5000);
         return () => clearInterval(interval);
     }, [agentId]);
 
-    // Scroll to bottom of chat
+    // Setup Speech Recognition
     useEffect(() => {
-        if (scrollAreaRef.current) {
-            const scrollContainer = scrollAreaRef.current.querySelector('[data-radix-scroll-area-viewport]');
-            if (scrollContainer) {
-                scrollContainer.scrollTop = scrollContainer.scrollHeight;
-            }
+        if (typeof window !== "undefined" && 'webkitSpeechRecognition' in window) {
+            const recognition = new (window as any).webkitSpeechRecognition();
+            recognition.continuous = false;
+            recognition.interimResults = false;
+
+            recognition.onstart = () => setIsListening(true);
+            recognition.onend = () => setIsListening(false);
+            recognition.onresult = (event: any) => {
+                const transcript = event.results[0][0].transcript;
+                setInput(transcript);
+                handleSendIntent(transcript);
+            };
+
+            recognitionRef.current = recognition;
         }
-    }, [messages]);
+    }, []);
 
-    const handleSendMessage = async (e: React.FormEvent) => {
-        e.preventDefault();
-        if (!input.trim()) return;
+    const toggleListening = () => {
+        if (isListening) {
+            recognitionRef.current?.stop();
+        } else {
+            recognitionRef.current?.start();
+        }
+    };
 
-        const userMsg = input;
-        setMessages(prev => [...prev, { role: "user", content: userMsg }]);
-        setInput("");
-        setChatLoading(true);
+    const playAudio = async (base64: string, isPreview = false) => {
+        if (!audioContextRef.current) {
+            audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+        }
 
         try {
-            // Use fetch for streaming response if possible, but for now simple POST
-            // The backend supports streaming but axios is easier for simple text first
-            // Let's use fetch to handle the stream properly if we want, or just wait for full response
-            // The backend returns NDJSON stream. Let's try to handle it or just use a simple non-streaming approach if backend supports it?
-            // The backend code shows it returns StreamingResponse. 
-            // Let's implement a simple reader for the stream.
+            const binaryString = window.atob(base64);
+            const len = binaryString.length;
+            const bytes = new Uint8Array(len);
+            for (let i = 0; i < len; i++) bytes[i] = binaryString.charCodeAt(i);
 
-            const response = await fetch(`http://127.0.0.1:8000/v1/agents/${agentId}/query`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ query: userMsg }),
+            const buffer = await audioContextRef.current.decodeAudioData(bytes.buffer);
+            const source = audioContextRef.current.createBufferSource();
+            source.buffer = buffer;
+            source.connect(audioContextRef.current.destination);
+
+            if (!isPreview) setIsPlayingAudio(true);
+            source.onended = () => {
+                if (!isPreview) setIsPlayingAudio(false);
+                if (isPreview) setPlayingPreviewId(null);
+            };
+            source.start(0);
+        } catch (e) {
+            console.error("Error playing audio", e);
+            setPlayingPreviewId(null);
+        }
+    };
+
+    const handleSendIntent = async (text: string = input) => {
+        if (!text.trim()) return;
+
+        setIsProcessing(true);
+        setProposedChanges(null); // Reset previous proposals
+        setVoiceOptions(null); // Reset voice options
+
+        try {
+            const res = await axios.post<AdminResponse>(`http://127.0.0.1:8000/v1/admin/intent`, {
+                text: text,
+                agent_id: agentId
             });
 
-            if (!response.body) throw new Error("No response body");
-
-            const reader = response.body.getReader();
-            const decoder = new TextDecoder();
-            let agentMsg = "";
-
-            // Add empty agent message to start
-            setMessages(prev => [...prev, { role: "agent", content: "" }]);
-
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-
-                const chunk = decoder.decode(value);
-                const lines = chunk.split("\n");
-
-                for (const line of lines) {
-                    if (!line.trim()) continue;
-                    try {
-                        const data = JSON.parse(line);
-                        if (data.type === "text") {
-                            agentMsg += data.content;
-                            setMessages(prev => {
-                                const newMsgs = [...prev];
-                                newMsgs[newMsgs.length - 1].content = agentMsg;
-                                return newMsgs;
-                            });
-                        }
-                    } catch (e) {
-                        console.error("Error parsing chunk:", e);
-                    }
-                }
+            setAdminReply(res.data.reply);
+            if (res.data.proposed_changes && Object.keys(res.data.proposed_changes).length > 0) {
+                setProposedChanges(res.data.proposed_changes);
+            }
+            if (res.data.voice_options) {
+                setVoiceOptions(res.data.voice_options);
             }
 
+            if (res.data.audio_base64) {
+                playAudio(res.data.audio_base64);
+            }
+
+            setInput("");
         } catch (error) {
-            console.error("Error sending message:", error);
-            setMessages(prev => [...prev, { role: "agent", content: "Error: Could not get response from agent." }]);
+            console.error("Error sending intent:", error);
+            setAdminReply("Sorry, I had trouble processing that request.");
         } finally {
-            setChatLoading(false);
+            setIsProcessing(false);
         }
     };
 
-    const copyEmbedCode = () => {
-        const code = `<script src="http://127.0.0.1:8000/widget.js" data-agent="${agentId}" async></script>`;
-        navigator.clipboard.writeText(code);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
-    };
-
-    const getStatusColor = (s: string) => {
-        switch (s) {
-            case "ready": return "bg-green-500";
-            case "scraping": return "bg-yellow-500";
-            case "failed": return "bg-red-500";
-            default: return "bg-gray-500";
+    const handlePlayPreview = async (voiceId: string, voiceName: string) => {
+        if (playingPreviewId) return; // Prevent multiple plays
+        setPlayingPreviewId(voiceId);
+        try {
+            const res = await axios.post(`http://127.0.0.1:8000/v1/admin/speak`, {
+                text: `Hello, I am ${voiceName}.`,
+                voice_id: voiceId
+            });
+            if (res.data.audio_base64) {
+                playAudio(res.data.audio_base64, true);
+            }
+        } catch (error) {
+            console.error("Error playing preview:", error);
+            setPlayingPreviewId(null);
         }
     };
+
+    const handleConfirmChanges = async () => {
+        if (!proposedChanges) return;
+
+        try {
+            await axios.patch(`http://127.0.0.1:8000/v1/agents/${agentId}/config`, proposedChanges);
+            setAdminReply("Great! I've updated your agent's configuration.");
+            setProposedChanges(null);
+            // Optionally play a success sound or TTS
+        } catch (error) {
+            console.error("Error saving config:", error);
+            setAdminReply("I encountered an error saving the changes.");
+        }
+    };
+
+    const getVoiceName = (id: string) => VOICES.find(v => v.id === id)?.name || id;
 
     return (
-        <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 p-8">
-            <div className="max-w-5xl mx-auto space-y-8">
-                <div className="flex justify-between items-center">
-                    <div>
-                        <h1 className="text-3xl font-bold tracking-tight">Agent Dashboard</h1>
-                        <p className="text-muted-foreground">Manage and test your AI agent</p>
-                    </div>
-                    <div className="flex items-center gap-2">
-                        <Badge variant="outline" className="text-sm py-1 px-3">
-                            ID: {agentId.slice(0, 8)}...
-                        </Badge>
-                    </div>
+        <div className="h-full w-full flex flex-col items-center justify-center p-6 relative overflow-y-auto">
+            {/* Main Content: The Orb & Interaction */}
+            <div className="flex-1 flex flex-col items-center justify-center w-full max-w-4xl z-10 space-y-12">
+
+                {/* Admin Agent Reply */}
+                <div className="text-center space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-700">
+                    <h2 className="text-3xl md:text-4xl font-medium text-slate-900 leading-tight tracking-tight drop-shadow-sm">
+                        "{adminReply}"
+                    </h2>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                    {/* Status Card */}
-                    <Card className="md:col-span-1 h-fit">
-                        <CardHeader>
-                            <CardTitle className="flex items-center gap-2">
-                                <Globe className="h-5 w-5" />
-                                Status
-                            </CardTitle>
-                        </CardHeader>
-                        <CardContent className="space-y-4">
-                            <div className="flex items-center justify-between">
-                                <span className="font-medium capitalize">{status?.status || "Loading..."}</span>
-                                <div className={`h-3 w-3 rounded-full ${getStatusColor(status?.status || "")}`} />
-                            </div>
+                {/* The Orb (Hidden if showing voice options to save space) */}
+                {!voiceOptions && (
+                    <div className={`orb-container transition-transform duration-500 ${isPlayingAudio ? 'scale-110' : 'scale-100'}`}>
+                        <div className="orb-glow" />
+                        <div className={`orb-core ${isPlayingAudio ? 'animate-pulse' : ''}`} />
+                    </div>
+                )}
 
-                            {status?.status === "scraping" && (
-                                <div className="space-y-2">
-                                    <div className="flex justify-between text-xs text-muted-foreground">
-                                        <span>Scraping pages...</span>
-                                        <span>{status.pages_scraped} / {status.total_pages || "?"}</span>
+                {/* Voice Options Grid */}
+                {voiceOptions && (
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 w-full animate-in zoom-in-95 duration-300">
+                        {voiceOptions.map((voice) => (
+                            <Card key={voice.id} className="bg-white/40 backdrop-blur-xl border-white/40 shadow-lg hover:shadow-xl hover:bg-white/60 transition-all cursor-pointer group"
+                                onClick={() => handleSendIntent(`Change voice to ${voice.name}`)}
+                            >
+                                <CardContent className="p-4 flex items-center justify-between">
+                                    <div className="flex flex-col">
+                                        <span className="font-medium text-slate-900">{voice.name}</span>
+                                        <span className="text-xs text-slate-600">Click to select</span>
                                     </div>
-                                    <Progress value={status.total_pages ? (status.pages_scraped / status.total_pages) * 100 : 0} />
+                                    <Button
+                                        size="icon"
+                                        variant="ghost"
+                                        className="rounded-full hover:bg-white/50 text-blue-600"
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            handlePlayPreview(voice.id, voice.name);
+                                        }}
+                                    >
+                                        {playingPreviewId === voice.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                                    </Button>
+                                </CardContent>
+                            </Card>
+                        ))}
+                    </div>
+                )}
+
+
+                {/* Proposed Changes Bubble */}
+                {proposedChanges && (
+                    <div className="w-full max-w-md animate-in zoom-in-95 duration-300">
+                        <Card className="bg-white/50 backdrop-blur-2xl border-white/50 shadow-2xl overflow-hidden p-0">
+                            <div className="bg-gradient-to-r from-purple-500/5 to-blue-500/5 border-b border-white/30 p-4">
+                                <div className="flex items-center gap-2.5">
+                                    <div className="p-2 bg-purple-500/10 rounded-lg">
+                                        <Sparkles className="w-4 h-4 text-purple-600" />
+                                    </div>
+                                    <h3 className="text-base font-semibold text-slate-900">Proposed Changes</h3>
                                 </div>
-                            )}
-
-                            {status?.status === "ready" && (
-                                <div className="p-3 bg-green-50 dark:bg-green-900/20 rounded-md text-sm text-green-700 dark:text-green-300">
-                                    Agent is ready to answer questions!
-                                </div>
-                            )}
-
-                            <Separator />
-
-                            <div className="space-y-2">
-                                <h3 className="text-sm font-medium">Live Scraping Logs</h3>
-                                <ScrollArea className="h-[300px] w-full rounded-md border p-2 bg-black text-xs font-mono text-green-400">
-                                    {status?.logs && status.logs.length > 0 ? (
-                                        <div className="space-y-1">
-                                            {status.logs.map((log: any, i: number) => (
-                                                <div key={i} className="flex gap-2">
-                                                    <span className="text-zinc-500">[{new Date(log.timestamp).toLocaleTimeString()}]</span>
-                                                    <span className={log.type === "error" ? "text-red-400" : log.type === "success" ? "text-green-400" : "text-zinc-300"}>
-                                                        {log.message}
-                                                    </span>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    ) : (
-                                        <div className="text-zinc-500 italic">Waiting for logs...</div>
-                                    )}
-                                </ScrollArea>
                             </div>
-                        </CardContent>
-                    </Card>
-
-                    {/* Main Content Tabs */}
-                    <div className="md:col-span-2">
-                        <Tabs defaultValue="test" className="w-full">
-                            <TabsList className="grid w-full grid-cols-2">
-                                <TabsTrigger value="test">Test Agent</TabsTrigger>
-                                <TabsTrigger value="embed">Embed</TabsTrigger>
-                            </TabsList>
-
-                            <TabsContent value="test" className="mt-4">
-                                <Card className="h-[600px] flex flex-col">
-                                    <CardHeader>
-                                        <CardTitle className="flex items-center gap-2">
-                                            <Bot className="h-5 w-5" />
-                                            Test Playground
-                                        </CardTitle>
-                                        <CardDescription>
-                                            Chat with your agent to verify its knowledge base.
-                                        </CardDescription>
-                                    </CardHeader>
-                                    <CardContent className="flex-1 overflow-hidden p-0">
-                                        <ScrollArea className="h-full p-4" ref={scrollAreaRef}>
-                                            <div className="space-y-4">
-                                                {messages.length === 0 && (
-                                                    <div className="text-center text-muted-foreground py-10">
-                                                        <Bot className="h-12 w-12 mx-auto mb-4 opacity-20" />
-                                                        <p>Start a conversation to test your agent.</p>
-                                                    </div>
-                                                )}
-                                                {messages.map((msg, i) => (
-                                                    <div
-                                                        key={i}
-                                                        className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
-                                                    >
-                                                        <div
-                                                            className={`flex gap-2 max-w-[80%] ${msg.role === "user" ? "flex-row-reverse" : "flex-row"
-                                                                }`}
-                                                        >
-                                                            <Avatar className="h-8 w-8">
-                                                                <AvatarFallback className={msg.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted"}>
-                                                                    {msg.role === "user" ? <User className="h-4 w-4" /> : <Bot className="h-4 w-4" />}
-                                                                </AvatarFallback>
-                                                            </Avatar>
-                                                            <div
-                                                                className={`rounded-lg p-3 text-sm ${msg.role === "user"
-                                                                    ? "bg-primary text-primary-foreground"
-                                                                    : "bg-muted"
-                                                                    }`}
-                                                            >
-                                                                {msg.content}
-                                                            </div>
-                                                        </div>
-                                                    </div>
-                                                ))}
-                                                {chatLoading && (
-                                                    <div className="flex justify-start">
-                                                        <div className="flex gap-2 max-w-[80%]">
-                                                            <Avatar className="h-8 w-8">
-                                                                <AvatarFallback className="bg-muted">
-                                                                    <Bot className="h-4 w-4" />
-                                                                </AvatarFallback>
-                                                            </Avatar>
-                                                            <div className="bg-muted rounded-lg p-3 flex items-center">
-                                                                <Loader2 className="h-4 w-4 animate-spin" />
-                                                            </div>
-                                                        </div>
-                                                    </div>
-                                                )}
-                                            </div>
-                                        </ScrollArea>
-                                    </CardContent>
-                                    <Separator />
-                                    <CardFooter className="p-4">
-                                        <form onSubmit={handleSendMessage} className="flex w-full gap-2">
-                                            <Input
-                                                placeholder="Ask a question..."
-                                                value={input}
-                                                onChange={(e) => setInput(e.target.value)}
-                                                disabled={chatLoading}
-                                            />
-                                            <Button type="submit" size="icon" disabled={chatLoading || !input.trim()}>
-                                                <Send className="h-4 w-4" />
-                                            </Button>
-                                        </form>
-                                    </CardFooter>
-                                </Card>
-                            </TabsContent>
-
-                            <TabsContent value="embed" className="mt-4">
-                                <Card>
-                                    <CardHeader>
-                                        <CardTitle className="flex items-center gap-2">
-                                            <Code className="h-5 w-5" />
-                                            Embed Code
-                                        </CardTitle>
-                                        <CardDescription>
-                                            Copy and paste this code into your website's HTML to add the agent widget.
-                                        </CardDescription>
-                                    </CardHeader>
-                                    <CardContent className="space-y-4">
-                                        <div className="relative rounded-md bg-muted p-4 font-mono text-sm">
-                                            <code className="break-all">
-                                                {`<script src="http://127.0.0.1:8000/widget.js" data-agent="${agentId}" async></script>`}
-                                            </code>
-                                            <Button
-                                                size="icon"
-                                                variant="ghost"
-                                                className="absolute right-2 top-2 h-8 w-8"
-                                                onClick={copyEmbedCode}
-                                            >
-                                                {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-                                            </Button>
+                            <CardContent className="space-y-3 p-5">
+                                {proposedChanges.voice_id && (
+                                    <div className="flex items-center justify-between p-3 rounded-lg bg-white/60 border border-white/40">
+                                        <span className="text-sm font-medium text-slate-600">Voice</span>
+                                        <span className="text-sm font-bold text-slate-900">{getVoiceName(proposedChanges.voice_id)}</span>
+                                    </div>
+                                )}
+                                {proposedChanges.personality && (
+                                    <div className="space-y-2">
+                                        <span className="text-sm font-medium text-slate-600">Personality</span>
+                                        <div className="p-3 rounded-lg bg-white/60 border border-white/40 text-sm text-slate-800 italic">
+                                            "{proposedChanges.personality}"
                                         </div>
-                                        <div className="rounded-md bg-blue-50 dark:bg-blue-900/20 p-4 text-sm text-blue-700 dark:text-blue-300">
-                                            <p className="font-semibold mb-1">Installation Instructions:</p>
-                                            <ol className="list-decimal list-inside space-y-1">
-                                                <li>Copy the code snippet above.</li>
-                                                <li>Paste it before the closing <code>&lt;/body&gt;</code> tag of your website.</li>
-                                                <li>The widget will appear in the bottom right corner.</li>
-                                            </ol>
-                                        </div>
-                                    </CardContent>
-                                </Card>
-                            </TabsContent>
-                        </Tabs>
+                                    </div>
+                                )}
+                            </CardContent>
+                            <div className="flex gap-3 p-5 pt-2 border-t border-white/20 bg-white/20">
+                                <Button
+                                    variant="outline"
+                                    className="flex-1 bg-white/60 border-white/50 hover:bg-white/90 text-slate-700"
+                                    onClick={() => setProposedChanges(null)}
+                                >
+                                    <X className="w-4 h-4 mr-2" />
+                                    Cancel
+                                </Button>
+                                <Button
+                                    className="flex-1 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white shadow-lg border-0"
+                                    onClick={handleConfirmChanges}
+                                >
+                                    <Check className="w-4 h-4 mr-2" />
+                                    Confirm
+                                </Button>
+                            </div>
+                        </Card>
+                    </div>
+                )}
+
+                {/* Input Area */}
+                <div className="w-full max-w-xl relative group">
+                    <div className="absolute inset-0 bg-gradient-to-r from-blue-200 to-purple-200 rounded-full blur-xl opacity-20 group-hover:opacity-40 transition-opacity duration-500" />
+                    <div className="relative flex items-center gap-2 bg-white/60 backdrop-blur-2xl border border-white/40 rounded-full p-2 shadow-xl hover:shadow-2xl transition-all duration-300">
+                        <Input
+                            value={input}
+                            onChange={(e) => setInput(e.target.value)}
+                            onKeyDown={(e) => e.key === "Enter" && handleSendIntent()}
+                            placeholder="Type a command or say 'Change voice to...'"
+                            className="flex-1 border-none bg-transparent shadow-none focus-visible:ring-0 text-slate-800 placeholder:text-slate-500 px-4 h-12 text-lg"
+                            disabled={isProcessing}
+                        />
+                        <Button
+                            size="icon"
+                            className={`h-12 w-12 rounded-full transition-all duration-300 ${isListening
+                                ? "bg-red-500 hover:bg-red-600 shadow-red-200 animate-pulse"
+                                : "bg-slate-900 hover:bg-slate-800 text-white shadow-lg"
+                                }`}
+                            onClick={toggleListening}
+                            disabled={isProcessing}
+                        >
+                            {isListening ? <MicOff className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
+                        </Button>
+                    </div>
+                    <div className="text-center mt-3 text-xs text-slate-400 font-medium tracking-wide uppercase">
+                        {isProcessing ? "Processing..." : isListening ? "Listening..." : "Ready for command"}
                     </div>
                 </div>
             </div>
