@@ -48,6 +48,7 @@ class ScrapeJob(Base):
     pages_scraped = Column(Integer, default=0)
     total_pages = Column(Integer)
     error_message = Column(Text)
+    logs = Column(JSON, default=[])
     config = Column(JSON, default={})
     created_at = Column(DateTime, default=datetime.utcnow)
 

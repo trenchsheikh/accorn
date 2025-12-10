@@ -74,12 +74,13 @@ def get_status(agent_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Agent not found")
     
     # Get latest job
-    job = db.query(ScrapeJob).filter(ScrapeJob.agent_id == agent_id).order_by(ScrapeJob.created_at.desc()).first()
+    job = db.query(ScrapeJob).filter(ScrapeJob.agent_id == real_id).order_by(ScrapeJob.created_at.desc()).first()
     
     return ScrapeStatus(
         status=agent.status if not job else job.status,
         pages_scraped=0 if not job else job.pages_scraped,
-        total_pages=0 if not job else job.total_pages
+        total_pages=0 if not job else job.total_pages,
+        logs=job.logs if job and job.logs else []
     )
 
 from app.services.rag import RAGService

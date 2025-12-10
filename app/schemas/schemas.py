@@ -29,3 +29,4 @@ class ScrapeStatus(BaseModel):
     status: str
     pages_scraped: int
     total_pages: Optional[int] = None
+    logs: List[Dict[str, Any]] = []

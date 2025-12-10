@@ -47,23 +47,40 @@ class ScraperWorker:
         self.max_pages = self.config.get("max_pages", 50)
         self.delay = self.config.get("delay_seconds", 1.0)
         
+    def _log(self, message: str, url: str = None, type: str = "info"):
+        """Add log entry"""
+        entry = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "message": message,
+            "url": url,
+            "type": type
+        }
+        # Append to existing logs
+        current_logs = list(self.job.logs) if self.job.logs else []
+        current_logs.append(entry)
+        self.job.logs = current_logs
+        self.db.commit()
+
     async def run(self):
         """Execute the scraping job"""
         try:
             self.job.status = "running"
             self.job.started_at = datetime.utcnow()
+            self._log(f"Starting scrape of {self.job.root_url}", self.job.root_url)
             self.db.commit()
             
             await self._deep_scrape(self.job.root_url)
             
             self.job.status = "completed"
             self.job.completed_at = datetime.utcnow()
+            self._log("Scraping completed successfully", type="success")
             self.db.commit()
             
         except Exception as e:
             logger.error(f"Scrape job failed: {e}")
             self.job.status = "failed"
             self.job.error_message = str(e)
+            self._log(f"Scraping failed: {e}", type="error")
             self.db.commit()
         finally:
             self.db.close()
@@ -87,10 +104,12 @@ class ScraperWorker:
                     continue
                 
                 logger.info(f"Scraping {url} (Depth {depth})")
+                self._log(f"Scraping page (Depth {depth})", url)
                 
                 try:
                     page_content = await self._fetch_page(context, url)
                     if not page_content:
+                        self._log("Failed to fetch page", url, type="error")
                         continue
                         
                     self.visited_urls.add(url)
@@ -102,19 +121,25 @@ class ScraperWorker:
                     text = self._extract_text(page_content)
                     chunks = self._chunk_text(text, url)
                     self._save_chunks(chunks)
+                    self._log(f"Extracted {len(chunks)} chunks", url)
                     
                     # Find links
                     if depth < self.max_depth:
                         links = self._extract_links(page_content, url)
+                        new_links = 0
                         for link in links:
                             if link not in self.visited_urls:
                                 queue.append((link, depth + 1))
+                                new_links += 1
+                        if new_links > 0:
+                            self._log(f"Found {new_links} new links", url)
                                 
                     if self.delay > 0:
                         await asyncio.sleep(self.delay)
                         
                 except Exception as e:
                     logger.error(f"Error scraping {url}: {e}")
+                    self._log(f"Error: {e}", url, type="error")
                     
             await browser.close()
 
