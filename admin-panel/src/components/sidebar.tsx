@@ -4,11 +4,13 @@ import Link from "next/link";
 import { useParams, usePathname } from "next/navigation";
 import { Bot, BarChart2, Settings, FileText, LogOut, User } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { useAuth } from "@/contexts/auth-context";
 
 export function Sidebar() {
     const pathname = usePathname();
     const params = useParams();
     const agentId = params.agentId as string;
+    const { user, logout } = useAuth();
 
     const links = [
         { href: `/dashboard/${agentId}`, label: "Agent", icon: Bot, active: pathname === `/dashboard/${agentId}` },
@@ -44,19 +46,25 @@ export function Sidebar() {
                 ))}
             </nav>
 
-            {/* User Profile */}
+            {/* User Profile with Logout */}
             <div className="p-4 border-t border-white/20 bg-white/5">
-                <div className="flex items-center gap-3 p-2 rounded-xl hover:bg-white/20 cursor-pointer transition-colors">
+                <div className="flex items-center gap-3 p-2 rounded-xl">
                     <Avatar className="h-9 w-9 border border-white/30 shadow-sm">
                         <AvatarFallback className="bg-gradient-to-br from-blue-500 to-purple-500 text-white">
                             <User className="w-4 h-4" />
                         </AvatarFallback>
                     </Avatar>
                     <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-slate-900 truncate">Admin User</p>
-                        <p className="text-xs text-slate-500 truncate">admin@acorn.ai</p>
+                        <p className="text-sm font-medium text-slate-900 truncate">{user?.name || "User"}</p>
+                        <p className="text-xs text-slate-500 truncate">{user?.email || "user@acorn.ai"}</p>
                     </div>
-                    <LogOut className="w-4 h-4 text-slate-400 hover:text-red-500 transition-colors" />
+                    <button
+                        onClick={logout}
+                        className="p-1.5 rounded-lg hover:bg-red-50 transition-colors group"
+                        title="Logout"
+                    >
+                        <LogOut className="w-4 h-4 text-slate-400 group-hover:text-red-500 transition-colors" />
+                    </button>
                 </div>
             </div>
         </div>

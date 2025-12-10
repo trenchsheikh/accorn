@@ -8,17 +8,18 @@ import { ArrowRight, Loader2, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/contexts/auth-context";
 
 export default function Onboarding() {
   const [step, setStep] = useState(0);
   const [formData, setFormData] = useState({
     name: "",
     url: "",
-    email: "",
   });
   const [loading, setLoading] = useState(false);
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
+  const { user, token, isLoading } = useAuth();
 
   useEffect(() => {
     // Focus input on step change
@@ -39,12 +40,6 @@ export default function Onboarding() {
       question: "What is your website URL?",
       placeholder: "https://example.com",
       type: "url",
-    },
-    {
-      key: "email",
-      question: "Where should we send updates?",
-      placeholder: "you@example.com",
-      type: "email",
     },
   ];
 
@@ -70,11 +65,17 @@ export default function Onboarding() {
         formattedUrl = `https://${formattedUrl}`;
       }
 
-      const response = await axios.post("http://127.0.0.1:8000/v1/onboard", {
-        root_url: formattedUrl,
-        email: formData.email,
-        name: formData.name,
-      });
+      const response = await axios.post(
+        "http://127.0.0.1:8000/v1/onboard",
+        {
+          root_url: formattedUrl,
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        }
+      );
       const agentId = response.data.id;
       router.push(`/dashboard/${agentId}`);
     } catch (error: any) {
@@ -87,12 +88,21 @@ export default function Onboarding() {
   const currentQ = questions[step];
   const progress = ((step + 1) / questions.length) * 100;
 
+  // Show loading while auth is being checked
+  if (isLoading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-white">
+        <Loader2 className="h-12 w-12 animate-spin text-zinc-400" />
+      </div>
+    );
+  }
+
   return (
-    <div className="flex min-h-screen flex-col bg-white dark:bg-zinc-950 font-sans selection:bg-black selection:text-white dark:selection:bg-white dark:selection:text-black">
+    <div className="flex min-h-screen flex-col bg-white font-sans selection:bg-black selection:text-white">
       {/* Progress Bar */}
       <div className="fixed top-0 left-0 h-1 bg-zinc-100 w-full">
         <motion.div
-          className="h-full bg-black dark:bg-white"
+          className="h-full bg-black"
           initial={{ width: 0 }}
           animate={{ width: `${progress}%` }}
           transition={{ duration: 0.5, ease: "easeInOut" }}
@@ -127,7 +137,7 @@ export default function Onboarding() {
                   <span className="text-sm font-medium text-zinc-400 uppercase tracking-wider">
                     Step {step + 1} of {questions.length}
                   </span>
-                  <h1 className="text-4xl md:text-5xl font-bold tracking-tight text-black dark:text-white leading-tight">
+                  <h1 className="text-4xl md:text-5xl font-bold tracking-tight text-black leading-tight">
                     {currentQ.question}
                   </h1>
                 </div>
@@ -140,7 +150,7 @@ export default function Onboarding() {
                     onChange={(e) => setFormData({ ...formData, [currentQ.key]: e.target.value })}
                     onKeyDown={handleKeyDown}
                     placeholder={currentQ.placeholder}
-                    className="w-full bg-transparent text-3xl md:text-4xl pb-4 border-b-2 border-zinc-200 focus:border-black dark:border-zinc-800 dark:focus:border-white outline-none transition-colors placeholder:text-zinc-300 dark:placeholder:text-zinc-700"
+                    className="w-full bg-transparent text-3xl md:text-4xl pb-4 border-b-2 border-zinc-200 focus:border-black outline-none transition-colors placeholder:text-zinc-300"
                     autoFocus
                   />
                   <div className="absolute right-0 bottom-4">
@@ -164,7 +174,7 @@ export default function Onboarding() {
                 </div>
 
                 <div className="flex items-center gap-2 text-sm text-zinc-400">
-                  <span className="bg-zinc-100 dark:bg-zinc-800 px-2 py-1 rounded text-xs font-mono">Enter</span>
+                  <span className="bg-zinc-100 px-2 py-1 rounded text-xs font-mono">Enter</span>
                   <span>to continue</span>
                 </div>
               </motion.div>

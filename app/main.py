@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db, engine, Base
 from app.models.models import Agent, User, ScrapeJob
 from app.schemas.schemas import AgentCreate, AgentResponse, AgentUpdate, QueryRequest, QueryResponse, ScrapeStatus
+from app.core.auth_utils import get_current_user
 from app.worker.scraper import ScraperWorker
 
 # Create tables (for MVP simplicity, use Alembic in prod)
@@ -26,14 +27,10 @@ async def run_scraper_task(job_id: str):
     await worker.run()
 
 @app.post("/v1/onboard", response_model=AgentResponse)
-def onboard(agent_in: AgentCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    # 1. Create or get user
-    user = db.query(User).filter(User.email == agent_in.email).first()
-    if not user:
-        user = User(email=agent_in.email, name=agent_in.name)
-        db.add(user)
-        db.commit()
-        db.refresh(user)
+def onboard(agent_in: AgentCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Create a new agent for the authenticated user."""
+    # Use authenticated user instead of creating/finding by email
+    user = current_user
     
     # 2. Create Agent
     agent = Agent(
@@ -61,6 +58,7 @@ def onboard(agent_in: AgentCreate, background_tasks: BackgroundTasks, db: Sessio
     background_tasks.add_task(run_scraper_task, str(job.id))
     
     return agent
+
 
 @app.get("/v1/agents/{agent_id}/status", response_model=ScrapeStatus)
 def get_status(agent_id: str, db: Session = Depends(get_db)):
@@ -186,7 +184,8 @@ async def query_agent(agent_id: str, query_in: QueryRequest, db: Session = Depen
 
     return StreamingResponse(response_generator(), media_type="application/x-ndjson")
 
-from app.api import admin
+from app.api import admin, auth
+app.include_router(auth.router, prefix="/v1/auth", tags=["auth"])
 app.include_router(admin.router, prefix="/v1/admin", tags=["admin"])
 
 @app.get("/widget.js")

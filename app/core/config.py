@@ -3,7 +3,7 @@ from typing import Optional
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "Acorn"
-    DATABASE_URL: str = "postgresql://postgres:postgres@localhost:5432/acorn"
+    DATABASE_URL: str = "sqlite:///./demo.db"
     SECRET_KEY: str = "your-secret-key-here"
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30

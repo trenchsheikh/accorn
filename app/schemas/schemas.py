@@ -5,8 +5,6 @@ from datetime import datetime
 
 class AgentCreate(BaseModel):
     root_url: HttpUrl
-    email: str
-    name: Optional[str] = None
 
 class AgentUpdate(BaseModel):
     voice_id: Optional[str] = None

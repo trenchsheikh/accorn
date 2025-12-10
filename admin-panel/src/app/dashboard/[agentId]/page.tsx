@@ -51,6 +51,7 @@ export default function Dashboard() {
     const params = useParams();
     const agentId = params.agentId as string;
 
+    const [mode, setMode] = useState<"admin" | "demo">("admin");
     const [status, setStatus] = useState<ScrapeStatus | null>(null);
     const [input, setInput] = useState("");
     const [isListening, setIsListening] = useState(false);
@@ -145,27 +146,43 @@ export default function Dashboard() {
         setVoiceOptions(null); // Reset voice options
 
         try {
-            const res = await axios.post<AdminResponse>(`http://127.0.0.1:8000/v1/admin/intent`, {
-                text: text,
-                agent_id: agentId
-            });
+            if (mode === "admin") {
+                // Admin mode - talk to configurator agent
+                const res = await axios.post<AdminResponse>(`http://127.0.0.1:8000/v1/admin/intent`, {
+                    text: text,
+                    agent_id: agentId
+                });
 
-            setAdminReply(res.data.reply);
-            if (res.data.proposed_changes && Object.keys(res.data.proposed_changes).length > 0) {
-                setProposedChanges(res.data.proposed_changes);
-            }
-            if (res.data.voice_options) {
-                setVoiceOptions(res.data.voice_options);
-            }
+                setAdminReply(res.data.reply);
+                if (res.data.proposed_changes && Object.keys(res.data.proposed_changes).length > 0) {
+                    setProposedChanges(res.data.proposed_changes);
+                }
+                if (res.data.voice_options) {
+                    setVoiceOptions(res.data.voice_options);
+                }
 
-            if (res.data.audio_base64) {
-                playAudio(res.data.audio_base64);
+                if (res.data.audio_base64) {
+                    playAudio(res.data.audio_base64);
+                }
+            } else {
+                // Demo mode - talk to actual agent with RAG context
+                const res = await axios.post(`http://127.0.0.1:8000/v1/agents/${agentId}/query`, {
+                    query: text
+                });
+
+                setAdminReply(res.data.response || res.data.answer || "I'm here to help!");
+
+                if (res.data.audio_base64) {
+                    playAudio(res.data.audio_base64);
+                }
             }
 
             setInput("");
         } catch (error) {
             console.error("Error sending intent:", error);
-            setAdminReply("Sorry, I had trouble processing that request.");
+            setAdminReply(mode === "admin"
+                ? "Sorry, I had trouble processing that request."
+                : "I apologize, but I'm having trouble answering that right now.");
         } finally {
             setIsProcessing(false);
         }
@@ -205,11 +222,34 @@ export default function Dashboard() {
     const getVoiceName = (id: string) => VOICES.find(v => v.id === id)?.name || id;
 
     return (
-        <div className="h-full w-full flex flex-col items-center justify-center p-6 relative overflow-y-auto">
-            {/* Main Content: The Orb & Interaction */}
-            <div className="flex-1 flex flex-col items-center justify-center w-full max-w-4xl z-10 space-y-12">
+        <div className="h-full w-full flex flex-col p-6 relative overflow-y-auto">
+            {/* Mode Toggle */}
+            <div className="w-full max-w-4xl mx-auto mb-8">
+                <div className="flex items-center justify-center gap-2 bg-white/60 backdrop-blur-xl border border-white/40 rounded-full p-1.5 shadow-lg w-fit mx-auto">
+                    <button
+                        onClick={() => setMode("admin")}
+                        className={`px-6 py-2.5 rounded-full font-medium transition-all duration-200 ${mode === "admin"
+                            ? "bg-slate-900 text-white shadow-lg"
+                            : "text-slate-600 hover:text-slate-900"
+                            }`}
+                    >
+                        Admin
+                    </button>
+                    <button
+                        onClick={() => setMode("demo")}
+                        className={`px-6 py-2.5 rounded-full font-medium transition-all duration-200 ${mode === "demo"
+                            ? "bg-slate-900 text-white shadow-lg"
+                            : "text-slate-600 hover:text-slate-900"
+                            }`}
+                    >
+                        Demo
+                    </button>
+                </div>
+            </div>
 
-                {/* Admin Agent Reply */}
+            {/* Main Interface - Same for both Admin and Demo */}
+            <div className="flex-1 flex flex-col items-center justify-center w-full max-w-4xl mx-auto z-10 space-y-12">
+                {/* Agent Reply */}
                 <div className="text-center space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-700">
                     <h2 className="text-3xl md:text-4xl font-medium text-slate-900 leading-tight tracking-tight drop-shadow-sm">
                         "{adminReply}"
@@ -224,8 +264,8 @@ export default function Dashboard() {
                     </div>
                 )}
 
-                {/* Voice Options Grid */}
-                {voiceOptions && (
+                {/* Voice Options Grid (Admin mode only) */}
+                {mode === "admin" && voiceOptions && (
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 w-full animate-in zoom-in-95 duration-300">
                         {voiceOptions.map((voice) => (
                             <Card key={voice.id} className="bg-white/40 backdrop-blur-xl border-white/40 shadow-lg hover:shadow-xl hover:bg-white/60 transition-all cursor-pointer group"
@@ -253,9 +293,8 @@ export default function Dashboard() {
                     </div>
                 )}
 
-
-                {/* Proposed Changes Bubble */}
-                {proposedChanges && (
+                {/* Proposed Changes Bubble (Admin mode only) */}
+                {mode === "admin" && proposedChanges && (
                     <div className="w-full max-w-md animate-in zoom-in-95 duration-300">
                         <Card className="bg-white/50 backdrop-blur-2xl border-white/50 shadow-2xl overflow-hidden p-0">
                             <div className="bg-gradient-to-r from-purple-500/5 to-blue-500/5 border-b border-white/30 p-4">
@@ -311,7 +350,9 @@ export default function Dashboard() {
                             value={input}
                             onChange={(e) => setInput(e.target.value)}
                             onKeyDown={(e) => e.key === "Enter" && handleSendIntent()}
-                            placeholder="Type a command or say 'Change voice to...'"
+                            placeholder={mode === "admin"
+                                ? "Type a command or say 'Change voice to...'"
+                                : "Ask me anything about the business..."}
                             className="flex-1 border-none bg-transparent shadow-none focus-visible:ring-0 text-slate-800 placeholder:text-slate-500 px-4 h-12 text-lg"
                             disabled={isProcessing}
                         />
@@ -328,7 +369,7 @@ export default function Dashboard() {
                         </Button>
                     </div>
                     <div className="text-center mt-3 text-xs text-slate-400 font-medium tracking-wide uppercase">
-                        {isProcessing ? "Processing..." : isListening ? "Listening..." : "Ready for command"}
+                        {isProcessing ? "Processing..." : isListening ? "Listening..." : mode === "admin" ? "Ready for command" : "Ready to chat"}
                     </div>
                 </div>
             </div>
