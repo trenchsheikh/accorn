@@ -78,7 +78,8 @@ def get_status(agent_id: str, db: Session = Depends(get_db)):
         status=agent.status if not job else job.status,
         pages_scraped=0 if not job else job.pages_scraped,
         total_pages=0 if not job else job.total_pages,
-        logs=job.logs if job and job.logs else []
+        logs=job.logs if job and job.logs else [],
+        root_url=agent.root_url
     )
 
 @app.patch("/v1/agents/{agent_id}/config", response_model=AgentResponse)

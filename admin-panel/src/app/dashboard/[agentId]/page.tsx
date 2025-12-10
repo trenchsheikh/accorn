@@ -9,7 +9,8 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Loader2, Mic, Send, Sparkles, Check, X, ArrowRight, Bot, User, MicOff, Code, Copy } from "lucide-react";
+import { Loader2, Mic, Send, Sparkles, Check, X, ArrowRight, Bot, User, MicOff, Code, Copy, MessageSquare } from "lucide-react";
+import ReactMarkdown from "react-markdown";
 
 interface ScrapeStatus {
     status: "pending" | "scraping" | "ready" | "failed";
@@ -62,11 +63,20 @@ export default function Dashboard() {
     const [proposedChanges, setProposedChanges] = useState<ProposedChanges | null>(null);
     const [voiceOptions, setVoiceOptions] = useState<Voice[] | null>(null);
     const [isPlayingAudio, setIsPlayingAudio] = useState(false);
+    const [showCaptions, setShowCaptions] = useState(true);
     const [playingPreviewId, setPlayingPreviewId] = useState<string | null>(null);
 
     // Audio Context
     const audioContextRef = useRef<AudioContext | null>(null);
     const recognitionRef = useRef<any>(null);
+    const scrollRef = useRef<HTMLDivElement>(null);
+
+    // Auto-scroll to bottom when text changes
+    useEffect(() => {
+        if (scrollRef.current) {
+            scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+        }
+    }, [adminReply]);
 
     // Poll status
     useEffect(() => {
@@ -92,15 +102,27 @@ export default function Dashboard() {
 
             recognition.onstart = () => setIsListening(true);
             recognition.onend = () => setIsListening(false);
-            recognition.onresult = (event: any) => {
-                const transcript = event.results[0][0].transcript;
-                setInput(transcript);
-                handleSendIntent(transcript);
-            };
-
             recognitionRef.current = recognition;
         }
     }, []);
+
+
+
+    // Reset state when mode changes
+    useEffect(() => {
+        setAdminReply(mode === "admin"
+            ? "Hi! I'm your Agent Configurator. How can I help you today?"
+            : "Hi! I'm your AI Assistant. Ask me anything about the business.");
+        setProposedChanges(null);
+        setVoiceOptions(null);
+        setPlayingPreviewId(null);
+        setIsPlayingAudio(false);
+        if (audioContextRef.current) {
+            audioContextRef.current.close().then(() => {
+                audioContextRef.current = null;
+            });
+        }
+    }, [mode]);
 
     const toggleListening = () => {
         if (isListening) {
@@ -110,7 +132,22 @@ export default function Dashboard() {
         }
     };
 
-    const playAudio = async (base64: string, isPreview = false) => {
+    const audioQueueRef = useRef<string[]>([]);
+    const isPlayingRef = useRef(false);
+
+    const playNextAudio = async () => {
+        if (audioQueueRef.current.length === 0) {
+            isPlayingRef.current = false;
+            setIsPlayingAudio(false);
+            return;
+        }
+
+        isPlayingRef.current = true;
+        setIsPlayingAudio(true);
+
+        const base64 = audioQueueRef.current.shift();
+        if (!base64) return;
+
         if (!audioContextRef.current) {
             audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
         }
@@ -126,14 +163,47 @@ export default function Dashboard() {
             source.buffer = buffer;
             source.connect(audioContextRef.current.destination);
 
-            if (!isPreview) setIsPlayingAudio(true);
             source.onended = () => {
-                if (!isPreview) setIsPlayingAudio(false);
-                if (isPreview) setPlayingPreviewId(null);
+                playNextAudio();
             };
             source.start(0);
         } catch (e) {
             console.error("Error playing audio", e);
+            playNextAudio();
+        }
+    };
+
+    const playAudio = (base64: string, isPreview = false) => {
+        if (isPreview) {
+            // Preview plays immediately, stopping others if needed (simplified for now)
+            playPreviewAudio(base64);
+        } else {
+            audioQueueRef.current.push(base64);
+            if (!isPlayingRef.current) {
+                playNextAudio();
+            }
+        }
+    };
+
+    const playPreviewAudio = async (base64: string) => {
+        if (!audioContextRef.current) {
+            audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+        }
+        try {
+            const binaryString = window.atob(base64);
+            const len = binaryString.length;
+            const bytes = new Uint8Array(len);
+            for (let i = 0; i < len; i++) bytes[i] = binaryString.charCodeAt(i);
+            const buffer = await audioContextRef.current.decodeAudioData(bytes.buffer);
+            const source = audioContextRef.current.createBufferSource();
+            source.buffer = buffer;
+            source.connect(audioContextRef.current.destination);
+            source.onended = () => {
+                setPlayingPreviewId(null);
+            };
+            source.start(0);
+        } catch (e) {
+            console.error("Error playing preview", e);
             setPlayingPreviewId(null);
         }
     };
@@ -165,15 +235,42 @@ export default function Dashboard() {
                     playAudio(res.data.audio_base64);
                 }
             } else {
-                // Demo mode - talk to actual agent with RAG context
-                const res = await axios.post(`http://127.0.0.1:8000/v1/agents/${agentId}/query`, {
-                    query: text
+                // Demo mode - streaming RAG responses
+                const response = await fetch(`http://127.0.0.1:8000/v1/agents/${agentId}/query`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query: text })
                 });
 
-                setAdminReply(res.data.response || res.data.answer || "I'm here to help!");
+                if (!response.body) {
+                    throw new Error("No response body");
+                }
 
-                if (res.data.audio_base64) {
-                    playAudio(res.data.audio_base64);
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let fullText = '';
+
+                while (true) {
+                    const { value, done } = await reader.read();
+                    if (done) break;
+
+                    const chunk = decoder.decode(value);
+                    const lines = chunk.split('\n');
+
+                    for (const line of lines) {
+                        if (!line.trim()) continue;
+                        try {
+                            const data = JSON.parse(line);
+                            if (data.type === 'text') {
+                                fullText += data.content;
+                                setAdminReply(fullText); // Update in real-time
+                            } else if (data.type === 'audio_chunk' || data.type === 'audio') {
+                                playAudio(data.content);
+                            }
+                        } catch (e) {
+                            console.error("Error parsing stream chunk:", e);
+                        }
+                    }
                 }
             }
 
@@ -187,6 +284,17 @@ export default function Dashboard() {
             setIsProcessing(false);
         }
     };
+
+    // Update speech recognition handler to use latest state
+    useEffect(() => {
+        if (recognitionRef.current) {
+            recognitionRef.current.onresult = (event: any) => {
+                const transcript = event.results[0][0].transcript;
+                setInput(transcript);
+                handleSendIntent(transcript);
+            };
+        }
+    }, [handleSendIntent]);
 
     const handlePlayPreview = async (voiceId: string, voiceName: string) => {
         if (playingPreviewId) return; // Prevent multiple plays
@@ -248,19 +356,63 @@ export default function Dashboard() {
             </div>
 
             {/* Main Interface - Same for both Admin and Demo */}
-            <div className="flex-1 flex flex-col items-center justify-center w-full max-w-4xl mx-auto z-10 space-y-12">
-                {/* Agent Reply */}
-                <div className="text-center space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-700">
-                    <h2 className="text-3xl md:text-4xl font-medium text-slate-900 leading-tight tracking-tight drop-shadow-sm">
-                        "{adminReply}"
-                    </h2>
-                </div>
+            <div className="flex-1 flex flex-col items-center justify-center w-full max-w-4xl mx-auto z-10 relative">
 
-                {/* The Orb (Hidden if showing voice options to save space) */}
+                {/* The Orb (Centered) */}
                 {!voiceOptions && (
                     <div className={`orb-container transition-transform duration-500 ${isPlayingAudio ? 'scale-110' : 'scale-100'}`}>
                         <div className="orb-glow" />
                         <div className={`orb-core ${isPlayingAudio ? 'animate-pulse' : ''}`} />
+                    </div>
+                )}
+
+                {/* Agent Reply (Overlay) */}
+                {showCaptions && (
+                    <div className="absolute inset-x-0 top-24 flex justify-center pointer-events-none z-20">
+                        <div className="relative group">
+                            <div
+                                ref={scrollRef}
+                                className="max-h-32 w-full max-w-3xl overflow-y-auto no-scrollbar text-center px-6 pointer-events-auto"
+                                style={{
+                                    maskImage: 'linear-gradient(to bottom, transparent, black 10%, black 90%, transparent)',
+                                    WebkitMaskImage: 'linear-gradient(to bottom, transparent, black 10%, black 90%, transparent)'
+                                }}
+                            >
+                                <div className="prose prose-xl prose-slate mx-auto text-slate-900 font-semibold leading-relaxed">
+                                    <ReactMarkdown
+                                        components={{
+                                            p: ({ node, ...props }) => <p className="mb-2" {...props} />,
+                                            ul: ({ node, ...props }) => <ul className="list-disc list-inside mb-2 text-left inline-block" {...props} />,
+                                            li: ({ node, ...props }) => <li className="mb-1" {...props} />,
+                                            strong: ({ node, ...props }) => <strong className="font-bold text-slate-900" {...props} />,
+                                        }}
+                                    >
+                                        {adminReply}
+                                    </ReactMarkdown>
+                                </div>
+                            </div>
+                            <button
+                                onClick={() => setShowCaptions(false)}
+                                className="absolute -right-12 top-0 p-2 text-slate-400 hover:text-slate-600 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-auto"
+                            >
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+                    </div>
+                )}
+
+                {/* Caption Toggle (if hidden) */}
+                {!showCaptions && (
+                    <div className="absolute top-24 right-8 z-20">
+                        <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => setShowCaptions(true)}
+                            className="bg-white/40 backdrop-blur-md hover:bg-white/60 text-slate-600"
+                        >
+                            <MessageSquare className="w-4 h-4 mr-2" />
+                            Show Captions
+                        </Button>
                     </div>
                 )}
 
@@ -295,50 +447,52 @@ export default function Dashboard() {
 
                 {/* Proposed Changes Bubble (Admin mode only) */}
                 {mode === "admin" && proposedChanges && (
-                    <div className="w-full max-w-md animate-in zoom-in-95 duration-300">
-                        <Card className="bg-white/50 backdrop-blur-2xl border-white/50 shadow-2xl overflow-hidden p-0">
-                            <div className="bg-gradient-to-r from-purple-500/5 to-blue-500/5 border-b border-white/30 p-4">
-                                <div className="flex items-center gap-2.5">
-                                    <div className="p-2 bg-purple-500/10 rounded-lg">
-                                        <Sparkles className="w-4 h-4 text-purple-600" />
-                                    </div>
-                                    <h3 className="text-base font-semibold text-slate-900">Proposed Changes</h3>
-                                </div>
-                            </div>
-                            <CardContent className="space-y-3 p-5">
-                                {proposedChanges.voice_id && (
-                                    <div className="flex items-center justify-between p-3 rounded-lg bg-white/60 border border-white/40">
-                                        <span className="text-sm font-medium text-slate-600">Voice</span>
-                                        <span className="text-sm font-bold text-slate-900">{getVoiceName(proposedChanges.voice_id)}</span>
-                                    </div>
-                                )}
-                                {proposedChanges.personality && (
-                                    <div className="space-y-2">
-                                        <span className="text-sm font-medium text-slate-600">Personality</span>
-                                        <div className="p-3 rounded-lg bg-white/60 border border-white/40 text-sm text-slate-800 italic">
-                                            "{proposedChanges.personality}"
+                    <div className="absolute inset-0 flex items-center justify-center z-30 pointer-events-none">
+                        <div className="w-full max-w-md animate-in zoom-in-95 duration-300 pointer-events-auto">
+                            <Card className="bg-white/50 backdrop-blur-2xl border-white/50 shadow-2xl overflow-hidden p-0">
+                                <div className="bg-gradient-to-r from-purple-500/5 to-blue-500/5 border-b border-white/30 p-4">
+                                    <div className="flex items-center gap-2.5">
+                                        <div className="p-2 bg-purple-500/10 rounded-lg">
+                                            <Sparkles className="w-4 h-4 text-purple-600" />
                                         </div>
+                                        <h3 className="text-base font-semibold text-slate-900">Proposed Changes</h3>
                                     </div>
-                                )}
-                            </CardContent>
-                            <div className="flex gap-3 p-5 pt-2 border-t border-white/20 bg-white/20">
-                                <Button
-                                    variant="outline"
-                                    className="flex-1 bg-white/60 border-white/50 hover:bg-white/90 text-slate-700"
-                                    onClick={() => setProposedChanges(null)}
-                                >
-                                    <X className="w-4 h-4 mr-2" />
-                                    Cancel
-                                </Button>
-                                <Button
-                                    className="flex-1 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white shadow-lg border-0"
-                                    onClick={handleConfirmChanges}
-                                >
-                                    <Check className="w-4 h-4 mr-2" />
-                                    Confirm
-                                </Button>
-                            </div>
-                        </Card>
+                                </div>
+                                <CardContent className="space-y-3 p-5">
+                                    {proposedChanges.voice_id && (
+                                        <div className="flex items-center justify-between p-3 rounded-lg bg-white/60 border border-white/40">
+                                            <span className="text-sm font-medium text-slate-600">Voice</span>
+                                            <span className="text-sm font-bold text-slate-900">{getVoiceName(proposedChanges.voice_id)}</span>
+                                        </div>
+                                    )}
+                                    {proposedChanges.personality && (
+                                        <div className="space-y-2">
+                                            <span className="text-sm font-medium text-slate-600">Personality</span>
+                                            <div className="p-3 rounded-lg bg-white/60 border border-white/40 text-sm text-slate-800 italic">
+                                                "{proposedChanges.personality}"
+                                            </div>
+                                        </div>
+                                    )}
+                                </CardContent>
+                                <div className="flex gap-3 p-5 pt-2 border-t border-white/20 bg-white/20">
+                                    <Button
+                                        variant="outline"
+                                        className="flex-1 bg-white/60 border-white/50 hover:bg-white/90 text-slate-700"
+                                        onClick={() => setProposedChanges(null)}
+                                    >
+                                        <X className="w-4 h-4 mr-2" />
+                                        Cancel
+                                    </Button>
+                                    <Button
+                                        className="flex-1 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white shadow-lg border-0"
+                                        onClick={handleConfirmChanges}
+                                    >
+                                        <Check className="w-4 h-4 mr-2" />
+                                        Confirm
+                                    </Button>
+                                </div>
+                            </Card>
+                        </div>
                     </div>
                 )}
 
